@@ -54,7 +54,11 @@ matrix spec (`docs/TEST-MATRIX.md`), macOS CI.
 
 M1 green: `swift build` + `swift test` + CLI smoke tests pass on CI
 (macos-15). M2 done: listing streams from `7zz` (incremental parser,
-progress, cancel, `list --stream`).
+progress, cancel, `list --stream`). M3 done: preview (text streams in
+via `7zz e -so`, capped at 64 KB / 200 lines; images, PDFs and binary
+entries defer to Quick Look) and nested archives (`list outer.zip
+inner.zip`, `preview outer.zip "inner.zip!/file.txt"`). GUI preview
+wiring is code only until the M7 Xcode project.
 
 ## Build (on a Mac)
 
