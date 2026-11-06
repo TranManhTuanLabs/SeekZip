@@ -54,7 +54,10 @@ macOS CI。
 
 M1 已通过：`swift build` + `swift test` + CLI 冒烟测试在 CI（macos-15）
 上通过。M2 已完成：列表从 `7zz` 流式读取（增量解析器、进度、取消、
-`list --stream`）。
+`list --stream`）。M3 已完成：预览（文本经 `7zz e -so` 流式读入，上限
+64 KB / 200 行；图片、PDF 与二进制文件交由 Quick Look）与嵌套归档
+（`list outer.zip inner.zip`、`preview outer.zip "inner.zip!/file.txt"`）。
+GUI 预览接线目前仅为代码，需待 M7 的 Xcode 工程。
 
 ## 构建（在 Mac 上）
 
