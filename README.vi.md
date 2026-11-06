@@ -54,6 +54,10 @@ Khung v0.1: model của core, parser cho listing `7zz -slt`, kiểm tra an toàn
 đường dẫn khi giải nén, CLI, khung MCP server, khung trình duyệt SwiftUI,
 đặc tả ma trận kiểm thử đầy đủ (`docs/TEST-MATRIX.vi.md`), CI cho macOS.
 
+M1 đã xanh: `swift build` + `swift test` + smoke test CLI pass trên CI
+(macos-15). M2 đã xong: listing stream từ `7zz` (parser tăng dần, tiến độ,
+hủy, `list --stream`).
+
 ## Build (trên máy Mac)
 
 ```sh
