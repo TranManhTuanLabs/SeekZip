@@ -175,6 +175,133 @@ public final class SevenZipEngine: @unchecked Sendable {
         try listStreaming(archive: archive, password: password) { _ in true }
     }
 
+    /// Lists the contents of an archive stored inside another archive
+    /// (M3, TEST-MATRIX NES-01). Each element of `nestedPath` is one
+    /// level. The returned `ArchiveInfo.path` is
+    /// `outer!/inner!/deep` so callers can tell which level it is.
+    public func listNested(archive: URL, nestedPath: [String],
+                           password: String? = nil) throws -> ArchiveInfo {
+        var listed = try withNestedArchive(archive: archive,
+                                           nestedPath: nestedPath,
+                                           password: password) { nestedURL in
+            try list(archive: nestedURL, password: password)
+        }
+        listed.path = archive.path + "!/" + nestedPath.joined(separator: "!/")
+        return listed
+    }
+
+    /// Extracts a nested archive chain to a temp dir and runs `body`
+    /// with the extracted (innermost) file's URL, then removes the temp
+    /// dir (M3). Each element of `nestedPath` is one level: the entry
+    /// is validated with `EntryPathSafety` and must exist, be a file,
+    /// and be an archive. The outer archive is never modified.
+    public func withNestedArchive<T>(archive: URL, nestedPath: [String],
+                                     password: String? = nil,
+                                     body: (URL) throws -> T) throws -> T {
+        guard !nestedPath.isEmpty else {
+            throw EngineError.failed(exitCode: 2, message: "nested path is empty")
+        }
+        // Reject unsafe nested paths before any work reaches the engine.
+        for component in nestedPath {
+            _ = try EntryPathSafety.destinationURL(
+                for: ArchiveEntry(path: component),
+                in: FileManager.default.temporaryDirectory)
+        }
+        var tempDirs: [URL] = []
+        defer {
+            for dir in tempDirs {
+                try? FileManager.default.removeItem(at: dir)
+            }
+        }
+        var current = archive
+        for component in nestedPath {
+            let info = try list(archive: current, password: password)
+            guard let entry = info.entries.first(where: { $0.path == component }) else {
+                throw EngineError.failed(exitCode: 2,
+                                         message: "nested entry not found: \(component)")
+            }
+            guard !entry.isDirectory, !entry.isSymlink else {
+                throw EngineError.failed(exitCode: 2,
+                                         message: "nested entry is not a file: \(component)")
+            }
+            guard entry.isArchive else {
+                throw EngineError.failed(exitCode: 2,
+                                         message: "nested entry is not an archive: \(component)")
+            }
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: dir,
+                                                    withIntermediateDirectories: true)
+            tempDirs.append(dir)
+            try extract(archive: current, entries: [component], to: dir,
+                        password: password)
+            current = dir.appendingPathComponent(component)
+        }
+        return try body(current)
+    }
+
+    /// Streams one entry's contents to `onChunk` without writing it to
+    /// disk (M3 preview). Uses `7zz e -so`: bytes are read with POSIX
+    /// `read()` and the process is terminated as soon as the handler
+    /// returns `false`, so a 10 GB entry is never decompressed in full
+    /// for a preview. Returns `true` when the entry streamed to EOF,
+    /// `false` when the handler stopped it early. The entry path is
+    /// validated with `EntryPathSafety` before it reaches `7zz`.
+    public func streamEntry(archive: URL, entry: String,
+                            password: String? = nil,
+                            onChunk: (Data) -> Bool) throws -> Bool {
+        _ = try EntryPathSafety.destinationURL(
+            for: ArchiveEntry(path: entry),
+            in: FileManager.default.temporaryDirectory)
+        var args = ["e", "-so", "-y", "-sccUTF-8"]
+        if let password { args.append("-p\(password)") }
+        args.append(archive.path)
+        args.append(entry)
+
+        let process = Process()
+        process.executableURL = binaryURL
+        process.arguments = args
+        process.standardInput = FileHandle.nullDevice
+        let out = Pipe()
+        process.standardOutput = out
+        // Stderr stays separate from the entry bytes: error text must
+        // never leak into a preview.
+        let err = Pipe()
+        process.standardError = err
+        try process.run()
+
+        let fd = out.fileHandleForReading.fileDescriptor
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        var completed = true
+        while true {
+            let count = read(fd, &buffer, buffer.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                break
+            }
+            if count == 0 { break } // EOF
+            if !onChunk(Data(buffer[0..<count])) { completed = false; break }
+        }
+        if !completed { process.terminate() }
+        process.waitUntilExit()
+        // Error output is small (a few lines), so draining it after the
+        // process exits cannot block.
+        let errData = err.fileHandleForReading.readDataToEndOfFile()
+        let code = process.terminationStatus
+        if completed {
+            guard code == 0 else {
+                let lowered = String(decoding: errData, as: UTF8.self).lowercased()
+                if lowered.contains("password") || lowered.contains("headers error")
+                    || lowered.contains("cannot open encrypted archive") {
+                    throw EngineError.wrongPassword
+                }
+                throw EngineError.failed(exitCode: code,
+                                         message: lastLine(of: String(decoding: errData, as: UTF8.self)))
+            }
+        }
+        return completed
+    }
+
     /// Test integrity of the whole archive (CRC check).
     public func test(archive: URL, password: String? = nil) throws {
         var args = ["t"]
