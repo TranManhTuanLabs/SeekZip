@@ -22,9 +22,17 @@
 - v0.1 脚手架已于 2026-11-07 提交：Core（模型、`-slt` 解析器、路径
   安全、7zz 引擎封装）、CLI、MCP 服务器、SwiftUI 浏览器骨架、
   单元测试、夹具生成器、macOS 15 ARM CI 工作流。
-- **尚未经过编译验证**：代码是在一台没有 Swift/Xcode 的 Linux 机器上
-  编写的。在 Mac 上的第一项工作：`swift build && swift test`
-  （见 `docs/BUILD_FROM_ZERO.zh-CN.md`），并修复出现的问题。
+- **M1 已通过（2026-11-07）**：CI run 42300451189——构建、单元测试、夹具、
+  矩阵冒烟测试均在 macos-15 上通过。`Package.swift` 排除了 SwiftUI GUI
+  目标（需要完整 Xcode；Mac 上只有 Command Line Tools）；GUI 源码仍保留
+  在 `Sources/SeekZipApp/` 中，等待 M7 的 Xcode 工程。仅有 CLT 的 Mac
+  本地无法运行 `swift test`（无 XCTest）——测试在 CI 上运行。
+- **M2 已完成**：列表流式读取——`StreamingListingParser`（增量解析，
+  块切分/UTF-8 安全）、`SevenZipEngine.listStreaming`（进度 + 通过
+  `EngineError.cancelled` 取消，在管道上使用 POSIX `read()`）、CLI
+  `list --stream`（JSON 行）。14 个单元测试通过，包括 10 万条目流式
+  测试和脚本化二进制取消测试。尚未在 CI 上运行完整的 10 GB / 100 万条
+  目夹具（PERF-01/04）——夹具很重，如 CI 时间允许再添加。
 - 引擎决策已定：7zz 为主引擎，XADMaster 后备引擎在
   第二阶段引入，libarchive 推迟——理由见 `docs/REFERENCE.md`。
 
@@ -76,7 +84,7 @@
 
 ## 7. 已知限制（v0.1）
 
-- 列表输出缓存在内存中（约 10 万条目以内没有问题；M2 修复）。
+- 自 M2 起列表从 `7zz` 流式读取（v0.1 是缓存在内存中）。
 - CLI 尚无 `-p` 标志；密码可通过 Core API 和 MCP 使用。
 - 解压尚未进行可用空间预检查或临时名称暂存。
 - GUI 只是骨架：尚无预览、标签页、队列或拖出功能。
