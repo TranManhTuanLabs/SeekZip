@@ -57,7 +57,7 @@ Khung v0.1: model của core, parser cho listing `7zz -slt`, kiểm tra an toàn
 ## Build (trên máy Mac)
 
 ```sh
-swift build          # core + CLI + MCP (+ GUI executable target)
+swift build          # core + CLI + MCP (GUI cần Xcode đầy đủ, xem Package.swift)
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
