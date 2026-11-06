@@ -36,9 +36,9 @@ seekzip-mcp (MCP) ────┘        │
 4. 退出代码 2 且伴随密码/头部错误时，映射为 `EngineError
    .wrongPassword`——头部加密的归档意味着需要密码提示，
    而非文件损坏。完整的 7zz 约定见 `docs/REFERENCE.md` §3。
-5. 前端渲染 `ArchiveInfo`。100 万条目的场景需要流式
-   解析 + 虚拟化 UI（里程碑，见 TEST-MATRIX 的 PERF-04）；v0.1
-   会将列表文本缓存在内存中，在约 10 万条目以内可以接受。
+5. 前端渲染 `ArchiveInfo`。自 M2 起列表以流式解析
+   （`StreamingListingParser` + `SevenZipEngine.listStreaming`）；100 万
+   条目的场景仍需要虚拟化 UI（M3+，见 TEST-MATRIX 的 PERF-04）。
 
 ## 4. 数据流——解压
 
@@ -73,7 +73,8 @@ stderr。
 ## 7. 不变量（不可破坏）
 
 1. **流式处理**：从不在 Core 中将归档字节（或解压出的完整文件）加载到
-   内存。列表文本是唯一的大宗数据，且已计划改为流式解析。
+   内存。列表输出从 `7zz` 管道增量读取、随到随解析（M2）；仅保留最后
+   4 KB 滚动尾部，用于错误报告。
 2. **引擎之前先做安全检查**：任何解压路径在到达 `7zz` 之前，都必须经过
    `EntryPathSafety` 对完整条目集合的校验。
 3. **无交互式子进程**：stdin 始终为 `/dev/null`；每条易触发提示的命令都
