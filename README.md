@@ -52,6 +52,10 @@ v0.1 scaffold: core models, `7zz -slt` listing parser, extraction path
 safety, CLI, MCP server skeleton, SwiftUI browser skeleton, full test
 matrix spec (`docs/TEST-MATRIX.md`), macOS CI.
 
+M1 green: `swift build` + `swift test` + CLI smoke tests pass on CI
+(macos-15). M2 done: listing streams from `7zz` (incremental parser,
+progress, cancel, `list --stream`).
+
 ## Build (on a Mac)
 
 ```sh
