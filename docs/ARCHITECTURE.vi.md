@@ -38,10 +38,10 @@ seekzip-mcp (MCP) ────┘        │
    .wrongPassword` — archive mã hoá header là trường hợp cần hỏi password,
    không phải file hỏng. Xem `docs/REFERENCE.md` §3 để biết toàn bộ hợp đồng
    của 7zz.
-5. Các frontend hiển thị `ArchiveInfo`. Trường hợp 1 triệu entry đòi hỏi
-   parse dạng streaming + UI ảo hoá (milestone, xem TEST-MATRIX PERF-04);
-   v0.1 đệm toàn bộ văn bản listing trong bộ nhớ, chấp nhận được tới khoảng
-   100k entry.
+5. Các frontend hiển thị `ArchiveInfo`. Từ M2 listing được parse dạng
+   stream (`StreamingListingParser` + `SevenZipEngine.listStreaming`);
+   trường hợp 1 triệu entry vẫn cần UI ảo hoá (M3+, xem TEST-MATRIX
+   PERF-04).
 
 ## 4. Luồng dữ liệu — giải nén
 
@@ -80,8 +80,9 @@ JSON-RPC 2.0 phân tách bằng ký tự xuống dòng trên stdio (MCP `2024-11
 ## 7. Các bất biến (không được phá vỡ)
 
 1. **Streaming**: không bao giờ nạp byte của archive (hay toàn bộ file đã
-   giải nén) vào bộ nhớ trong Core. Văn bản listing là dữ liệu khối lớn duy
-   nhất, và nó đã được lên kế hoạch chuyển sang parse dạng streaming.
+   giải nén) vào bộ nhớ trong Core. Output của listing được đọc tăng dần
+   từ pipe của `7zz` và parse ngay khi tới (M2); chỉ giữ lại 4 KB cuối,
+   để báo lỗi.
 2. **An toàn trước engine**: không đường giải nén nào được chạm tới `7zz`
    mà chưa qua kiểm tra `EntryPathSafety` trên toàn bộ tập entry.
 3. **Không subprocess tương tác**: stdin luôn là `/dev/null`; mọi lệnh có
