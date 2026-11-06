@@ -37,6 +37,17 @@ the next agent's context starts here.
   streaming test and a scripted-binary cancel test. Full 10 GB / 1M-entry
   fixture runs (PERF-01/04) are not yet in CI — heavy fixtures, to be
   added if CI time allows.
+- **M3 done**: preview + nested archives — `PreviewProvider` (text
+  streams in via `7zz e -so`, capped at 64 KB / 200 lines, UTF-8 safe,
+  NUL sniffing for binary; images/PDF/binary defer to Quick Look),
+  `SevenZipEngine.listNested` / `withNestedArchive` (temp-dir
+  extraction through `EntryPathSafety`, NES-01 3-level chain), CLI
+  `preview` and `list outer.zip inner.zip` (nested preview as
+  `preview outer.zip "inner.zip!/file.txt"`). 30 unit tests pass (16
+  new, scripted-binary). GUI preview panel + nested navigation are
+  wired in `Sources/SeekZipApp/` as code only — NOT compiled by
+  SwiftPM/CI (needs full Xcode); the native QLPreviewPanel itself
+  lands with the M7 Xcode project.
 - Engine decisions are settled: 7zz primary, XADMaster fallback in
   phase 2, libarchive deferred — rationale in `docs/REFERENCE.md`.
 
@@ -96,7 +107,9 @@ truth when versions disagree.
 - Listing streams from `7zz` since M2 (was buffered in memory in v0.1).
 - CLI has no `-p` flag yet; passwords work via Core API and MCP.
 - Extraction does not yet do free-space precheck or temp-name staging.
-- GUI is a skeleton: no preview, tabs, queue, or drag-out yet.
+- GUI is a skeleton: preview panel + nested navigation are wired in
+  code (M3) but uncompiled until the M7 Xcode project; no tabs, queue,
+  or drag-out yet.
 - Passwords passed to `7zz` via `-p` are visible in the local process
   list (accepted, documented risk).
 
