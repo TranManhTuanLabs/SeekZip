@@ -2,8 +2,9 @@ import Foundation
 
 /// Parser for `7zz l -slt` technical listings.
 ///
-/// The listing is a header block, a line containing only `--`, then one
-/// `Key = Value` block per entry, blocks separated by blank lines.
+/// The listing is a header block, a line containing only `--`, then the
+/// archive header, a `----------` separator, then one `Key = Value`
+/// block per entry, blocks separated by blank lines.
 /// Filenames may contain "=" and spaces, so values are taken verbatim
 /// after the first " = ".
 public enum ListingParser {
@@ -14,9 +15,13 @@ public enum ListingParser {
                              text: String) -> ArchiveInfo {
         var entries: [ArchiveEntry] = []
         var inEntries = false
+        var entriesStarted = false
         var current: [String: String] = [:]
 
         func flush() {
+            // The block between "--" and the "----------" separator is the
+            // archive header (Path/Type/Physical Size), not an entry.
+            guard entriesStarted else { current = [:]; return }
             guard let path = current["Path"], !path.isEmpty else { return }
             let folder = current["Folder"] == "+"
             let attr = current["Attributes"]
@@ -42,6 +47,12 @@ public enum ListingParser {
             }
             if line.isEmpty {
                 flush()
+                continue
+            }
+            // "----------" separates the archive header from the entries.
+            if line.allSatisfy({ $0 == "-" }) {
+                current = [:]
+                entriesStarted = true
                 continue
             }
             guard let eq = line.range(of: " = ") else { continue }
