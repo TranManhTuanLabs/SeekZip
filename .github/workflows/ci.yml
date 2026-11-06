@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    # Apple Silicon runner — matches the app's target platform.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install 7-Zip engine
+        run: brew install sevenzip
+
+      - name: Build (core, CLI, MCP, app)
+        run: swift build
+
+      - name: Unit tests
+        run: swift test
+
+      - name: Generate test fixtures
+        run: |
+          chmod +x Tests/Matrix/generate-matrix.sh
+          Tests/Matrix/generate-matrix.sh /tmp/fixtures
+
+      - name: Matrix smoke tests via CLI
+        run: |
+          BIN=.build/debug/seekzip
+          $BIN list --json /tmp/fixtures/plain.zip > /dev/null
+          $BIN list --json /tmp/fixtures/solid.7z > /dev/null
+          $BIN test /tmp/fixtures/plain.zip
+          $BIN test /tmp/fixtures/encrypted-headers.7z && exit 1 || true # needs password
+          $BIN list /tmp/fixtures/truncated.zip && exit 1 || true        # must fail cleanly
+          mkdir -p /tmp/out
+          $BIN extract /tmp/fixtures/plain.zip /tmp/out
+          test -f "/tmp/out/src/hello.txt"
+          # zip-slip must be blocked with exit code 4
+          $BIN extract /tmp/fixtures/zip-slip.zip /tmp/out; test $? -eq 4
