@@ -40,6 +40,20 @@ public struct ArchiveEntry: Codable, Identifiable, Sendable {
     public var isSymlink: Bool {
         attributes?.contains("l") ?? false // unix mode "lrwxrwxrwx"
     }
+
+    /// Archive formats SeekZip can open as a nested archive (M3).
+    private static let archiveExtensions: Set<String> = [
+        "zip", "7z", "rar", "tar", "gz", "tgz", "bz2", "xz", "zst",
+        "lz4", "iso", "dmg", "cab", "wim", "arj", "lzh", "jar", "war",
+        "apk", "ipa", "xar", "deb", "rpm", "msi", "cpio", "lzma",
+    ]
+
+    /// True when this entry is itself an archive that can be opened
+    /// in place (`SevenZipEngine.listNested`).
+    public var isArchive: Bool {
+        let ext = (path as NSString).pathExtension.lowercased()
+        return Self.archiveExtensions.contains(ext)
+    }
 }
 
 /// Summary information about a whole archive.
