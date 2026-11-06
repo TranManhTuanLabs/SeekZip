@@ -37,4 +37,4 @@ jobs:
           $BIN extract /tmp/fixtures/plain.zip /tmp/out
           test -f "/tmp/out/src/hello.txt"
           # zip-slip must be blocked with exit code 4
-          $BIN extract /tmp/fixtures/zip-slip.zip /tmp/out; test $? -eq 4
+          $BIN extract /tmp/fixtures/zip-slip.zip /tmp/out && exit 1 || test $? -eq 4
