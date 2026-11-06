@@ -13,7 +13,7 @@
 # Mac (it is: this Mac is on the owner's tailnet as mnhs-macbook-pro).
 set -u
 
-PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBjFrr3uCeSkgQjjpIyFZeAL+jqK8Wa9xoMZwmWAnlED hatch"
+PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIECTSsLAMhIQfxrlqEo0HljflhTbn/2AloDT9/ZDnxPa hatch"
 
 echo "=== SeekZip Mac bridge setup ==="
 
