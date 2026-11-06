@@ -24,9 +24,19 @@ the next agent's context starts here.
 - v0.1 scaffold committed 2026-11-07: Core (models, `-slt` parser, path
   safety, 7zz engine wrapper), CLI, MCP server, SwiftUI browser skeleton,
   unit tests, fixture generator, macOS 15 ARM CI workflow.
-- **Not yet compile-verified**: the code was authored on a Linux machine
-  without Swift/Xcode. First job on a Mac: `swift build && swift test`
-  (see `docs/BUILD_FROM_ZERO.md`) and fix whatever surfaces.
+- **M1 green (2026-11-07)**: CI run 42300451189 — build, unit tests,
+  fixtures, matrix smoke tests all pass on macos-15. `Package.swift`
+  excludes the SwiftUI GUI target (needs full Xcode; the Mac has Command
+  Line Tools only); GUI source stays in `Sources/SeekZipApp/` for the M7
+  Xcode project. `swift test` does not run locally on a CLT-only Mac (no
+  XCTest) — tests run on CI.
+- **M2 done**: listing streams — `StreamingListingParser` (incremental,
+  chunk-split/UTF-8 safe), `SevenZipEngine.listStreaming` (progress +
+  cancel via `EngineError.cancelled`, POSIX `read()` on the pipe), CLI
+  `list --stream` (JSON lines). 14 unit tests pass, including a 100k-entry
+  streaming test and a scripted-binary cancel test. Full 10 GB / 1M-entry
+  fixture runs (PERF-01/04) are not yet in CI — heavy fixtures, to be
+  added if CI time allows.
 - Engine decisions are settled: 7zz primary, XADMaster fallback in
   phase 2, libarchive deferred — rationale in `docs/REFERENCE.md`.
 
@@ -83,7 +93,7 @@ truth when versions disagree.
 
 ## 7. Known limitations (v0.1)
 
-- Listing output is buffered in memory (fine to ~100k entries; M2 fixes).
+- Listing streams from `7zz` since M2 (was buffered in memory in v0.1).
 - CLI has no `-p` flag yet; passwords work via Core API and MCP.
 - Extraction does not yet do free-space precheck or temp-name staging.
 - GUI is a skeleton: no preview, tabs, queue, or drag-out yet.
