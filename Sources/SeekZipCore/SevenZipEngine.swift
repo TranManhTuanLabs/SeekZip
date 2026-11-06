@@ -80,8 +80,8 @@ public final class SevenZipEngine: @unchecked Sendable {
             throw EngineError.failed(exitCode: code, message: lastLine(of: output))
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: archive.path))?[.size] as? UInt64 ?? 0
-        return ListingParser.parse(archivePath: archive.path,
-                                   physicalSize: size ?? 0,
+        return ListingParser.parse(physicalSize: size,
+                                   archivePath: archive.path,
                                    text: output)
     }
 
