@@ -52,6 +52,10 @@ v0.1 脚手架：核心模型、`7zz -slt` 列表解析器、解压路径安全�
 器骨架、SwiftUI 浏览器骨架、完整的测试矩阵规格（`docs/TEST-MATRIX.zh-CN.md`）、
 macOS CI。
 
+M1 已通过：`swift build` + `swift test` + CLI 冒烟测试在 CI（macos-15）
+上通过。M2 已完成：列表从 `7zz` 流式读取（增量解析器、进度、取消、
+`list --stream`）。
+
 ## 构建（在 Mac 上）
 
 ```sh
