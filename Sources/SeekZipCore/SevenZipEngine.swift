@@ -4,20 +4,29 @@ public enum EngineError: Error, CustomStringConvertible {
     case binaryNotFound
     case failed(exitCode: Int32, message: String)
     case wrongPassword
+    case cancelled
 
     public var description: String {
         switch self {
         case .binaryNotFound: return "7zz engine binary not found"
         case .failed(let code, let msg): return "7zz exited \(code): \(msg)"
         case .wrongPassword: return "wrong password or corrupted archive"
+        case .cancelled: return "listing cancelled"
         }
     }
 }
 
+/// Progress snapshot reported while a listing streams in.
+public struct ListingProgress: Sendable {
+    public var bytesRead: UInt64
+    public var entriesSeen: Int
+}
+
 /// Thin streaming wrapper around the official `7zz` binary.
 /// Archive bytes never pass through this process's memory: listing output
-/// is the only thing read, and extraction is done by 7zz itself — but only
-/// after every entry has passed EntryPathSafety.
+/// is read incrementally and parsed as it arrives (M2), and extraction is
+/// done by 7zz itself — but only after every entry has passed
+/// EntryPathSafety.
 public final class SevenZipEngine: @unchecked Sendable {
     public let binaryURL: URL
 
@@ -55,34 +64,99 @@ public final class SevenZipEngine: @unchecked Sendable {
         process.standardOutput = out
         process.standardError = out
         try process.run()
-        // Listing output for huge archives can be large but is text; stream
-        // it through a temp file instead of a memory buffer in production
-        // use — see docs/TEST-MATRIX.md case PERF-04.
         let data = out.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         return (process.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 
-    public func list(archive: URL, password: String? = nil) throws -> ArchiveInfo {
+    /// Streams a listing: each entry is handed to `onEntry` as soon as
+    /// its block is parsed, instead of buffering the whole `7zz` output
+    /// in memory first (M2). Returning `false` from `onEntry` terminates
+    /// the `7zz` process and throws `EngineError.cancelled` — no partial
+    /// `ArchiveInfo` is ever returned. `onProgress` reports bytes read
+    /// and entries seen after each chunk.
+    ///
+    /// If `7zz` exits non-zero after some entries were already emitted,
+    /// the error is thrown and the collected entries are discarded: the
+    /// caller must treat a thrown listing as incomplete.
+    public func listStreaming(archive: URL, password: String? = nil,
+                              onProgress: ((ListingProgress) -> Void)? = nil,
+                              onEntry: (ArchiveEntry) -> Bool) throws -> ArchiveInfo {
         var args = ["l", "-slt", "-sccUTF-8"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
-        let (code, output) = try run(args)
+
+        let process = Process()
+        process.executableURL = binaryURL
+        process.arguments = args
+        process.standardInput = FileHandle.nullDevice
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = out
+        try process.run()
+
+        let handle = out.fileHandleForReading
+        let parser = StreamingListingParser()
+        var collected: [ArchiveEntry] = []
+        // Rolling tail of the output, kept only to report the error when
+        // 7zz exits non-zero; the full listing is never buffered.
+        var tail = Data()
+        var cancelled = false
+
+        while !cancelled {
+            let chunk = handle.readData(ofLength: 65536)
+            if chunk.isEmpty { break } // EOF
+            tail.append(chunk)
+            if tail.count > 4096 { tail.removeFirst(tail.count - 4096) }
+            for entry in parser.feed(chunk) {
+                collected.append(entry)
+                if !onEntry(entry) { cancelled = true; break }
+            }
+            if !cancelled {
+                onProgress?(ListingProgress(bytesRead: parser.bytesRead,
+                                           entriesSeen: parser.entriesSeen))
+            }
+        }
+        // Emit entries completed by the trailing partial block, if any.
+        // (Not on the cancel path: a cancelled listing reports nothing.)
+        if !cancelled {
+            for entry in parser.finish() {
+                collected.append(entry)
+                if !onEntry(entry) { cancelled = true; break }
+            }
+            onProgress?(ListingProgress(bytesRead: parser.bytesRead,
+                                       entriesSeen: parser.entriesSeen))
+        }
+
+        if cancelled {
+            process.terminate()
+            process.waitUntilExit()
+            throw EngineError.cancelled
+        }
+        process.waitUntilExit()
+        let code = process.terminationStatus
         guard code == 0 else {
             // Header-encrypted 7z (and wrong passwords) fail listing with
             // exit code 2 and a password/headers error — that means "ask
             // for a password", not "corrupt archive". See REFERENCE.md §3.
-            let lowered = output.lowercased()
-            if lowered.contains("password") || lowered.contains("headers error")
-                || lowered.contains("cannot open encrypted archive") {
+            // Error output is small, so it fits in the rolling tail.
+            let tailText = String(decoding: tail, as: UTF8.self).lowercased()
+            if tailText.contains("password") || tailText.contains("headers error")
+                || tailText.contains("cannot open encrypted archive") {
                 throw EngineError.wrongPassword
             }
-            throw EngineError.failed(exitCode: code, message: lastLine(of: output))
+            throw EngineError.failed(exitCode: code, message: lastLine(of: String(decoding: tail, as: UTF8.self)))
         }
         let size = (try? FileManager.default.attributesOfItem(atPath: archive.path))?[.size] as? UInt64 ?? 0
-        return ListingParser.parse(physicalSize: size,
-                                   archivePath: archive.path,
-                                   text: output)
+        return ArchiveInfo(path: archive.path, format: "unknown",
+                           physicalSize: size, entries: collected)
+    }
+
+    /// Collects the streamed listing into one `ArchiveInfo`. Callers that
+    /// only need the full listing use this; callers that want entries as
+    /// they arrive use `listStreaming` directly.
+    public func list(archive: URL, password: String? = nil) throws -> ArchiveInfo {
+        try listStreaming(archive: archive, password: password) { _ in true }
     }
 
     /// Test integrity of the whole archive (CRC check).
