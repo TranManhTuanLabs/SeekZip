@@ -55,7 +55,7 @@ matrix spec (`docs/TEST-MATRIX.md`), macOS CI.
 ## Build (on a Mac)
 
 ```sh
-swift build          # core + CLI + MCP (+ GUI executable target)
+swift build          # core + CLI + MCP (GUI needs full Xcode, see Package.swift)
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
