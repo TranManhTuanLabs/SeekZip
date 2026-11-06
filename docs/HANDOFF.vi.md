@@ -26,10 +26,19 @@ trạng thái thay đổi đáng kể — ngữ cảnh của agent tiếp theo b
 - Khung v0.1 đã commit ngày 2026-11-07: Core (model, parser `-slt`, an
   toàn đường dẫn, wrapper cho engine 7zz), CLI, MCP server, khung trình
   duyệt SwiftUI, unit test, trình tạo fixture, workflow CI macOS 15 ARM.
-- **Chưa được kiểm chứng biên dịch**: code được viết trên một máy Linux
-  không có Swift/Xcode. Việc đầu tiên trên máy Mac: `swift build &&
-  swift test` (xem `docs/BUILD_FROM_ZERO.vi.md`) và sửa bất cứ điều gì nổi
-  lên.
+- **M1 đã xanh (2026-11-07)**: CI run 42300451189 — build, unit test,
+  fixture, smoke test ma trận đều pass trên macos-15. `Package.swift`
+  loại target GUI SwiftUI (cần Xcode đầy đủ; máy Mac chỉ có Command Line
+  Tools); code GUI vẫn nằm trong `Sources/SeekZipApp/` để chờ Xcode
+  project ở M7. `swift test` không chạy được local trên máy chỉ có CLT
+  (không có XCTest) — test chạy trên CI.
+- **M2 đã xong**: listing stream — `StreamingListingParser` (tăng dần, an
+  toàn khi chunk cắt giữa dòng/ký tự UTF-8), `SevenZipEngine.listStreaming`
+  (tiến độ + hủy qua `EngineError.cancelled`, POSIX `read()` trên pipe),
+  CLI `list --stream` (JSON lines). 14 unit test pass, gồm test stream
+  100k entry và test hủy bằng binary giả lập. Chưa chạy fixture 10 GB /
+  1M entry đầy đủ (PERF-01/04) trên CI — fixture nặng, sẽ thêm sau nếu có
+  thời gian CI cho phép.
 - Các quyết định về engine đã chốt: 7zz là engine chính, XADMaster làm
   dự phòng trong phase 2, libarchive hoãn lại — lý do nằm trong
   `docs/REFERENCE.md`.
@@ -90,8 +99,7 @@ ngôn ngữ còn lại trong cùng commit** — hoặc, nếu không thể, thê
 
 ## 7. Hạn chế đã biết (v0.1)
 
-- Output của listing được đệm trong bộ nhớ (ổn tới khoảng 100k entry; M2
-  sẽ sửa).
+- Listing stream từ `7zz` từ M2 (v0.1 còn đệm trong bộ nhớ).
 - CLI chưa có cờ `-p`; password hoạt động qua Core API và MCP.
 - Giải nén chưa kiểm tra dung lượng trống trước và chưa dùng tên tạm.
 - GUI là khung xương: chưa có xem trước, tab, hàng đợi hay kéo-thả ra
