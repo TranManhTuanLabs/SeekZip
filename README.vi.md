@@ -56,7 +56,11 @@ Khung v0.1: model của core, parser cho listing `7zz -slt`, kiểm tra an toàn
 
 M1 đã xanh: `swift build` + `swift test` + smoke test CLI pass trên CI
 (macos-15). M2 đã xong: listing stream từ `7zz` (parser tăng dần, tiến độ,
-hủy, `list --stream`).
+hủy, `list --stream`). M3 đã xong: xem trước (text stream vào qua
+`7zz e -so`, giới hạn 64 KB / 200 dòng; ảnh, PDF và file nhị phân giao cho
+Quick Look) và archive lồng nhau (`list outer.zip inner.zip`,
+`preview outer.zip "inner.zip!/file.txt"`). Code xem trước của GUI hiện
+chỉ mới ở dạng code, chờ Xcode project ở M7.
 
 ## Build (trên máy Mac)
 
