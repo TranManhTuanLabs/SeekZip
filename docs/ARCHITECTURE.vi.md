@@ -20,10 +20,11 @@ seekzip-mcp (MCP) ────┘        │
 | `SeekZipCore/ArchiveEntry.swift` | Các model giá trị `ArchiveEntry`, `ArchiveInfo` (Codable — cùng hình dạng mà CLI in ra dạng JSON và MCP trả về) |
 | `SeekZipCore/ListingParser.swift` | Parse listing kỹ thuật `7zz l -slt` thành các model |
 | `SeekZipCore/EntryPathSafety.swift` | Chính sách zip-slip / đường dẫn tuyệt đối / symlink, heuristic phát hiện zip-bomb |
-| `SeekZipCore/SevenZipEngine.swift` | Wrapper subprocess: list, test, extract (chọn lọc), create |
+| `SeekZipCore/SevenZipEngine.swift` | Wrapper subprocess: list, test, extract (chọn lọc), create, liệt kê archive lồng nhau, stream nội dung entry |
+| `SeekZipCore/PreviewProvider.swift` | Xem trước entry (M3): text stream vào giới hạn 64 KB / 200 dòng, ảnh/PDF/file nhị phân giao cho Quick Look |
 | `SeekZipCLI/main.swift` | Xử lý tham số, output dạng người đọc / JSON, ánh xạ exit code |
 | `SeekZipMCP/main.swift` | MCP server dạng JSON-RPC trên stdio; schema của các tool; uỷ thác cho Core |
-| `SeekZipApp/SeekZipApp.swift` | Trình duyệt SwiftUI: mở, lọc, chọn, giải nén |
+| `SeekZipApp/SeekZipApp.swift` | Trình duyệt SwiftUI: mở, lọc, chọn, giải nén, xem trước (Space), điều hướng archive lồng nhau |
 
 ## 3. Luồng dữ liệu — liệt kê một archive
 
@@ -41,7 +42,11 @@ seekzip-mcp (MCP) ────┘        │
 5. Các frontend hiển thị `ArchiveInfo`. Từ M2 listing được parse dạng
    stream (`StreamingListingParser` + `SevenZipEngine.listStreaming`);
    trường hợp 1 triệu entry vẫn cần UI ảo hoá (M3+, xem TEST-MATRIX
-   PERF-04).
+   PERF-04). Từ M3, archive lồng nhau liệt kê được tại chỗ
+   (`SevenZipEngine.listNested` / `withNestedArchive`) và entry xem
+   trước được mà không cần giải nén (`PreviewProvider`, `streamEntry`
+   qua `7zz e -so`); panel xem trước và điều hướng lồng nhau của GUI đã
+   được nối code nhưng chưa biên dịch cho tới Xcode project ở M7.
 
 ## 4. Luồng dữ liệu — giải nén
 
