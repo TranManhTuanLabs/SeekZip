@@ -43,6 +43,224 @@ final class ListingParserTests: XCTestCase {
     }
 }
 
+final class NestedPreviewTests: XCTestCase {
+    /// A fake `7zz` that serves three listing levels (outer → inner →
+    /// deep), creates extracted files for `x`, and prints preview bytes
+    /// for `e -so` according to `previewMode` ("text", "long",
+    /// "binary", "utf8"). Mirrors the fixture layout of
+    /// Tests/Matrix/generate-matrix.sh (nested.zip / inner.zip).
+    private func makeFake7zz(previewMode: String) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("fake7zz")
+        let previewCommand: String
+        switch previewMode {
+        case "binary":
+            previewCommand = "printf 'PNG\\000binary\\000data'"
+        case "long":
+            previewCommand = "i=1; while [ $i -le 300 ]; do printf 'line %d\\n' \"$i\"; i=$((i+1)); done"
+        case "utf8":
+            // Octal UTF-8 for "xin chào tiếng Việt" (dash printf has no \x).
+            previewCommand = "printf 'xin ch\\303\\240o ti\\341\\272\\277ng Vi\\341\\273\\207t\\nsecond line\\n'"
+        default:
+            previewCommand = "printf 'hello seekzip\\nsecond line\\n'"
+        }
+        let text = """
+        #!/bin/sh
+        for last in "$@"; do :; done
+        cmd="$1"
+        if [ "$cmd" = "l" ]; then
+          case "$last" in
+            *deep.zip)
+              printf '7-Zip (z) 24.09\\n\\nListing archive: deep.zip\\n\\n--\\nPath = deep.zip\\nType = zip\\nPhysical Size = 10\\n\\n----------\\nPath = deep-file.txt\\nFolder = -\\nSize = 4\\n\\n'
+              ;;
+            *inner.zip)
+              printf '7-Zip (z) 24.09\\n\\nListing archive: inner.zip\\n\\n--\\nPath = inner.zip\\nType = zip\\nPhysical Size = 50\\n\\n----------\\nPath = deep.zip\\nFolder = -\\nSize = 40\\n\\nPath = inner-file.txt\\nFolder = -\\nSize = 9\\n\\n'
+              ;;
+            *)
+              printf '7-Zip (z) 24.09\\n\\nListing archive: outer.zip\\n\\n--\\nPath = outer.zip\\nType = zip\\nPhysical Size = 100\\n\\n----------\\nPath = hello.txt\\nFolder = -\\nSize = 5\\n\\nPath = inner.zip\\nFolder = -\\nSize = 50\\n\\n'
+              ;;
+          esac
+          exit 0
+        fi
+        if [ "$cmd" = "x" ]; then
+          dest=""
+          for a in "$@"; do case "$a" in -o*) dest="${a#-o}";; esac; done
+          mkdir -p "$(dirname "$dest/$last")"
+          : > "$dest/$last"
+          exit 0
+        fi
+        if [ "$cmd" = "e" ]; then
+          \(previewCommand)
+          exit 0
+        fi
+        exit 2
+        """
+        try text.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        return script
+    }
+
+    private func outerURL() -> URL {
+        URL(fileURLWithPath: "/tmp/outer.zip")
+    }
+
+    // MARK: Nested listing
+
+    func testNestedListsOneLevel() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let info = try engine.listNested(archive: outerURL(), nestedPath: ["inner.zip"])
+        XCTAssertEqual(info.entries.map(\.path), ["deep.zip", "inner-file.txt"])
+        XCTAssertTrue(info.path.contains("outer.zip!/inner.zip"))
+    }
+
+    func testNestedListsTwoLevels() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let info = try engine.listNested(archive: outerURL(),
+                                         nestedPath: ["inner.zip", "deep.zip"])
+        XCTAssertEqual(info.entries.map(\.path), ["deep-file.txt"])
+        XCTAssertTrue(info.path.contains("inner.zip!/deep.zip"))
+    }
+
+    func testNestedRejectsTraversal() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        XCTAssertThrowsError(try engine.listNested(archive: outerURL(),
+                                                   nestedPath: ["../evil.zip"])) { error in
+            XCTAssertTrue(error is EntryPathSafety.Violation,
+                          "expected a path-safety violation, got \(error)")
+        }
+    }
+
+    func testNestedMissingEntryThrows() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        XCTAssertThrowsError(try engine.listNested(archive: outerURL(),
+                                                   nestedPath: ["nope.zip"]))
+    }
+
+    func testNestedRejectsNonArchiveEntry() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        XCTAssertThrowsError(try engine.listNested(archive: outerURL(),
+                                                   nestedPath: ["hello.txt"]))
+    }
+
+    // MARK: Streaming entry bytes
+
+    func testStreamEntryCompletes() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        var bytes = Data()
+        let completed = try engine.streamEntry(archive: outerURL(), entry: "hello.txt") { chunk in
+            bytes.append(chunk)
+            return true
+        }
+        XCTAssertTrue(completed)
+        XCTAssertEqual(String(decoding: bytes, as: UTF8.self),
+                       "hello seekzip\nsecond line\n")
+    }
+
+    func testStreamEntryStopsEarly() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "long").path)
+        var chunks = 0
+        let completed = try engine.streamEntry(archive: outerURL(), entry: "hello.txt") { _ in
+            chunks += 1
+            return false // stop after the first chunk
+        }
+        XCTAssertFalse(completed)
+        XCTAssertEqual(chunks, 1)
+    }
+
+    // MARK: Text preview
+
+    func testPreviewText() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "hello.txt", size: 24))
+        XCTAssertEqual(preview.kind, .text)
+        XCTAssertEqual(preview.text, "hello seekzip\nsecond line")
+        XCTAssertFalse(preview.truncated)
+        XCTAssertEqual(preview.linesShown, 2)
+        XCTAssertFalse(preview.quickLook)
+    }
+
+    func testPreviewTruncatesLongText() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "long").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "long.txt", size: 1_000_000))
+        XCTAssertEqual(preview.kind, .text)
+        XCTAssertTrue(preview.truncated)
+        XCTAssertEqual(preview.linesShown, PreviewProvider.maxPreviewLines)
+        XCTAssertTrue(preview.text?.hasPrefix("line 1\n") ?? false)
+        XCTAssertTrue(preview.text?.hasSuffix("line 200") ?? false)
+        XCTAssertFalse(preview.text?.contains("line 201") ?? true)
+    }
+
+    func testPreviewUTF8Safe() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "utf8").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "tiếng việt.txt", size: 40))
+        XCTAssertEqual(preview.kind, .text)
+        XCTAssertEqual(preview.text, "xin chào tiếng Việt\nsecond line")
+        XCTAssertFalse(preview.truncated)
+    }
+
+    func testPreviewNestedText() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let preview = try PreviewProvider(engine: engine)
+            .previewNested(archive: outerURL(), nestedPath: ["inner.zip"],
+                           entry: ArchiveEntry(path: "inner-file.txt", size: 9))
+        XCTAssertEqual(preview.kind, .text)
+        XCTAssertEqual(preview.text, "hello seekzip\nsecond line")
+        XCTAssertFalse(preview.truncated)
+    }
+
+    func testPreviewBinaryDetectedByNUL() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "binary").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "data.bin", size: 100))
+        XCTAssertEqual(preview.kind, .binary)
+        XCTAssertNil(preview.text)
+        XCTAssertTrue(preview.quickLook)
+    }
+
+    // MARK: Preview kinds without reading content
+
+    func testPreviewImageNeedsQuickLook() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "photo.png", size: 12_345))
+        XCTAssertEqual(preview.kind, .image)
+        XCTAssertNil(preview.text)
+        XCTAssertTrue(preview.quickLook)
+        XCTAssertNotNil(preview.note)
+    }
+
+    func testPreviewArchiveEntry() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "inner.zip", size: 50))
+        XCTAssertEqual(preview.kind, .archive)
+        XCTAssertNil(preview.text)
+        XCTAssertFalse(preview.quickLook)
+    }
+
+    func testPreviewDirectory() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "src", isDirectory: true))
+        XCTAssertEqual(preview.kind, .directory)
+        XCTAssertNil(preview.text)
+    }
+
+    func testPreviewEncryptedWithoutPassword() throws {
+        let engine = try SevenZipEngine(binaryPath: try makeFake7zz(previewMode: "text").path)
+        let preview = try PreviewProvider(engine: engine)
+            .preview(archive: outerURL(), entry: ArchiveEntry(path: "secret.txt", isEncrypted: true))
+        XCTAssertEqual(preview.kind, .encrypted)
+        XCTAssertNil(preview.text)
+    }
+}
+
 final class EntryPathSafetyTests: XCTestCase {
     private let root = URL(fileURLWithPath: "/tmp/out")
 
