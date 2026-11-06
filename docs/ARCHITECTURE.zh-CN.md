@@ -19,10 +19,11 @@ seekzip-mcp (MCP) ────┘        │
 | `SeekZipCore/ArchiveEntry.swift` | `ArchiveEntry`、`ArchiveInfo` 值模型（Codable——与 CLI 以 JSON 打印、MCP 返回的形状相同） |
 | `SeekZipCore/ListingParser.swift` | 将 `7zz l -slt` 技术列表解析为模型 |
 | `SeekZipCore/EntryPathSafety.swift` | Zip-slip / 绝对路径 / 符号链接策略，zip 炸弹（zip-bomb）启发式检测 |
-| `SeekZipCore/SevenZipEngine.swift` | 子进程封装：列举、测试、（选择性）解压、创建 |
+| `SeekZipCore/SevenZipEngine.swift` | 子进程封装：列举、测试、（选择性）解压、创建、嵌套归档列举、条目流式读取 |
+| `SeekZipCore/PreviewProvider.swift` | 条目预览（M3）：文本流式读入，上限 64 KB / 200 行，图片/PDF/二进制文件交由 Quick Look |
 | `SeekZipCLI/main.swift` | 参数处理、人类可读/JSON 输出、退出代码映射 |
 | `SeekZipMCP/main.swift` | MCP stdio JSON-RPC 服务器；工具 schema；委托给 Core |
-| `SeekZipApp/SeekZipApp.swift` | SwiftUI 浏览器：打开、筛选、选择、解压 |
+| `SeekZipApp/SeekZipApp.swift` | SwiftUI 浏览器：打开、筛选、选择、解压、预览（空格键）、嵌套导航 |
 
 ## 3. 数据流——列举归档
 
@@ -38,7 +39,11 @@ seekzip-mcp (MCP) ────┘        │
    而非文件损坏。完整的 7zz 约定见 `docs/REFERENCE.md` §3。
 5. 前端渲染 `ArchiveInfo`。自 M2 起列表以流式解析
    （`StreamingListingParser` + `SevenZipEngine.listStreaming`）；100 万
-   条目的场景仍需要虚拟化 UI（M3+，见 TEST-MATRIX 的 PERF-04）。
+   条目的场景仍需要虚拟化 UI（M3+，见 TEST-MATRIX 的 PERF-04）。自 M3
+   起，嵌套归档可就地列举（`SevenZipEngine.listNested` /
+   `withNestedArchive`），条目无需解压即可预览（`PreviewProvider`，
+   经 `7zz e -so` 的 `streamEntry`）；GUI 预览面板与嵌套导航已接线，
+   但需待 M7 的 Xcode 工程才能编译。
 
 ## 4. 数据流——解压
 
