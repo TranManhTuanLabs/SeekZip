@@ -73,3 +73,204 @@ final class EntryPathSafetyTests: XCTestCase {
         XCTAssertNotNil(EntryPathSafety.bombWarning(for: info))
     }
 }
+
+final class StreamingParserTests: XCTestCase {
+    private let sample = """
+    7-Zip (z) 24.09 (arm64) : Copyright (c) 1999-2024 Igor Pavlov
+
+    Listing archive: demo.zip
+
+    --
+    Path = demo.zip
+    Type = zip
+    Physical Size = 1234
+
+    ----------
+    Path = folder
+    Folder = +
+    Size = 0
+    Packed Size = 0
+    Attributes = D drwxr-xr-x
+
+    Path = folder/file = with equals.txt
+    Folder = -
+    Size = 42
+    Packed Size = 40
+    Modified = 2024-05-01 10:11:12.1234567
+    CRC = DEADBEEF
+    Method = Deflate
+    Encrypted = -
+    Attributes = A -rw-r--r--
+
+    """
+
+    private func feedAll(_ text: String, chunkSize: Int) -> [ArchiveEntry] {
+        let parser = StreamingListingParser()
+        let data = Data(text.utf8)
+        var entries = [ArchiveEntry]()
+        var offset = 0
+        while offset < data.count {
+            let end = min(offset + chunkSize, data.count)
+            entries += parser.feed(data[offset..<end])
+            offset = end
+        }
+        entries += parser.finish()
+        return entries
+    }
+
+    func testFeedsOneByteAtATime() {
+        let entries = feedAll(sample, chunkSize: 1)
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertTrue(entries[0].isDirectory)
+        XCTAssertEqual(entries[1].path, "folder/file = with equals.txt")
+        XCTAssertEqual(entries[1].size, 42)
+        XCTAssertEqual(entries[1].crc, "DEADBEEF")
+    }
+
+    func testFeedsArbitraryChunks() {
+        // 13-byte chunks split lines, " = " separators and blocks.
+        let entries = feedAll(sample, chunkSize: 13)
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries[1].path, "folder/file = with equals.txt")
+    }
+
+    func testSplitsMultiByteUTF8NameAcrossChunks() {
+        let text = """
+        7-Zip (z) 24.09
+
+        Listing archive: uni.zip
+
+        --
+        Path = uni.zip
+        Type = zip
+        Physical Size = 99
+
+        ----------
+        Path = tiếng việt.txt
+        Folder = -
+        Size = 7
+
+        """
+        // One byte at a time: every multi-byte UTF-8 character in the
+        // Vietnamese name is split across chunks.
+        let entries = feedAll(text, chunkSize: 1)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].path, "tiếng việt.txt")
+        XCTAssertEqual(entries[0].size, 7)
+    }
+
+    func testFinishWithoutTrailingNewline() {
+        let text = """
+        --
+        Path = a.zip
+        Type = zip
+
+        ----------
+        Path = last.txt
+        Folder = -
+        Size = 3
+        """
+        let entries = feedAll(text, chunkSize: 8)
+        XCTAssertEqual(entries.count, 1)
+        XCTAssertEqual(entries[0].path, "last.txt")
+    }
+
+    func testStreamsOneHundredThousandEntries() {
+        var text = "7-Zip (z) 24.09\n\nListing archive: big.zip\n\n--\n"
+        text += "Path = big.zip\nType = zip\nPhysical Size = 1\n\n----------\n"
+        for i in 0..<100_000 {
+            text += "Path = f\(i).txt\nFolder = -\nSize = \(i)\n\n"
+        }
+        let entries = feedAll(text, chunkSize: 65536)
+        XCTAssertEqual(entries.count, 100_000)
+        XCTAssertEqual(entries[99_999].path, "f99999.txt")
+        XCTAssertEqual(entries[99_999].size, 99_999)
+        XCTAssertEqual(entries[0].path, "f0.txt")
+    }
+
+    func testParseMatchesStreaming() {
+        let streamed = feedAll(sample, chunkSize: 64)
+        let parsed = ListingParser.parse(archivePath: "demo.zip", text: sample)
+        XCTAssertEqual(streamed.map(\.path), parsed.entries.map(\.path))
+        XCTAssertEqual(streamed.map(\.size), parsed.entries.map(\.size))
+    }
+}
+
+final class StreamingEngineTests: XCTestCase {
+    /// Writes a fake `7zz` — a shell script that prints a `-slt` listing
+    /// slowly, one entry at a time — and returns its URL. The script
+    /// ignores its arguments and traps TERM so the test can prove the
+    /// engine really terminated it.
+    private func makeScriptedBinary(entryCount: Int, delay: String,
+                                    marker: URL) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("fake7zz")
+        let text = """
+        #!/bin/sh
+        trap 'echo terminated > "\(marker.path)"; exit 0' TERM
+        printf '7-Zip (z) 24.09\\n\\nListing archive: scripted.zip\\n\\n--\\nPath = scripted.zip\\nType = zip\\nPhysical Size = 1234\\n\\n----------\\n'
+        i=1
+        while [ $i -le \(entryCount) ]; do
+          printf 'Path = file%05d.txt\\nFolder = -\\nSize = %d\\n\\n' "$i" "$i"
+          sleep \(delay)
+          i=$((i+1))
+        done
+        """
+        try text.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        return script
+    }
+
+    private func tempMarker() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("terminated")
+    }
+
+    func testListStreamingCollectsAll() throws {
+        let marker = try tempMarker()
+        let script = try makeScriptedBinary(entryCount: 50, delay: "0", marker: marker)
+        let engine = try SevenZipEngine(binaryPath: script.path)
+        var seenProgress: [ListingProgress] = []
+        let info = try engine.listStreaming(
+            archive: URL(fileURLWithPath: "/tmp/scripted.zip"),
+            onProgress: { seenProgress.append($0) }) { _ in true }
+        XCTAssertEqual(info.entries.count, 50)
+        XCTAssertEqual(info.entries[49].path, "file00050.txt")
+        XCTAssertEqual(info.entries[49].size, 50)
+        XCTAssertFalse(seenProgress.isEmpty)
+        XCTAssertEqual(seenProgress.last?.entriesSeen, 50)
+        XCTAssertGreaterThan(seenProgress.last?.bytesRead ?? 0, 0)
+    }
+
+    func testCancelTerminatesProcess() throws {
+        let marker = try tempMarker()
+        // Uninterrupted this script takes ~10 s (200 entries x 0.05 s).
+        let script = try makeScriptedBinary(entryCount: 200, delay: "0.05", marker: marker)
+        let engine = try SevenZipEngine(binaryPath: script.path)
+        let started = Date()
+        var received = 0
+        XCTAssertThrowsError(
+            try engine.listStreaming(
+                archive: URL(fileURLWithPath: "/tmp/scripted.zip")) { _ in
+                    received += 1
+                    return received < 3 // cancel after the 3rd entry
+                }
+        ) { error in
+            guard case EngineError.cancelled = error else {
+                XCTFail("expected EngineError.cancelled, got \(error)")
+                return
+            }
+        }
+        XCTAssertEqual(received, 3)
+        // Cancellation must stop promptly, not after the full listing.
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5.0)
+        // The process really received SIGTERM (trap ran), not just a
+        // closed pipe: no zombie producer left behind.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
+    }
+}
