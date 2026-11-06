@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(Glibc)
+import Glibc
+#endif
 
 public enum EngineError: Error, CustomStringConvertible {
     case binaryNotFound
@@ -103,9 +106,22 @@ public final class SevenZipEngine: @unchecked Sendable {
         var tail = Data()
         var cancelled = false
 
+        // NB: POSIX read() on the pipe's file descriptor — not
+        // FileHandle.readData(ofLength:) or read(upToCount:). Both
+        // Foundation methods loop until the buffer is full or EOF, so a
+        // slow producer's first entries would only arrive after the
+        // whole listing finished. read() returns as soon as any bytes
+        // are available, which is what makes this truly streaming.
+        let fd = handle.fileDescriptor
+        var buffer = [UInt8](repeating: 0, count: 65536)
         while !cancelled {
-            let chunk = handle.readData(ofLength: 65536)
-            if chunk.isEmpty { break } // EOF
+            let count = read(fd, &buffer, buffer.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                break
+            }
+            if count == 0 { break } // EOF
+            let chunk = Data(buffer[0..<count])
             tail.append(chunk)
             if tail.count > 4096 { tail.removeFirst(tail.count - 4096) }
             for entry in parser.feed(chunk) {
