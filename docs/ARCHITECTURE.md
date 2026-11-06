@@ -37,9 +37,10 @@ seekzip-mcp (MCP) ────┘        │
 4. Exit code 2 with a password/headers error maps to `EngineError
    .wrongPassword` — header-encrypted archives are a password prompt,
    not corruption. See `docs/REFERENCE.md` §3 for the full 7zz contract.
-5. Frontends render `ArchiveInfo`. The 1M-entry case requires streaming
-   parse + virtualised UI (milestone, see TEST-MATRIX PERF-04); v0.1
-   buffers listing text, which is acceptable up to ~100k entries.
+5. Frontends render `ArchiveInfo`. Since M2 the listing parses as a
+   stream (`StreamingListingParser` + `SevenZipEngine.listStreaming`);
+   the 1M-entry case still needs a virtualised UI (M3+, see TEST-MATRIX
+   PERF-04).
 
 ## 4. Data flow — extraction
 
@@ -78,8 +79,9 @@ newline-delimited JSON-RPC 2.0 on stdio (MCP `2024-11-05`).
 ## 7. Invariants (do not break)
 
 1. **Streaming**: never load archive bytes (or full extracted files) into
-   memory in Core. Listing text is the only bulk data, and it is slated
-   for streaming parse.
+   memory in Core. Listing output is read incrementally from the `7zz`
+   pipe and parsed as it arrives (M2); only a 4 KB rolling tail is kept,
+   for error reporting.
 2. **Safety before engine**: no extraction path reaches `7zz` without
    `EntryPathSafety` validation of the full entry set.
 3. **No interactive subprocesses**: stdin is always `/dev/null`; every
