@@ -55,7 +55,7 @@ macOS CI。
 ## 构建（在 Mac 上）
 
 ```sh
-swift build          # core + CLI + MCP (+ GUI executable target)
+swift build          # core + CLI + MCP（GUI 需要完整 Xcode，见 Package.swift）
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
