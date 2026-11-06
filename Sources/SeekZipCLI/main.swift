@@ -6,6 +6,7 @@ import SeekZipCore
 
 let args = Array(CommandLine.arguments.dropFirst())
 let json = args.contains("--json")
+let stream = args.contains("--stream")
 let positional = args.filter { !$0.hasPrefix("--") }
 
 func emitJSON<T: Encodable>(_ value: T) {
@@ -18,12 +19,12 @@ func emitJSON<T: Encodable>(_ value: T) {
 }
 
 func fail(_ code: Int32, _ message: String) -> Never {
-    if json { emitJSON(["error": message]) } else { FileHandle.standardError.write("seekzip: \(message)\n".data(using: .utf8)!) }
+    if json || stream { emitJSON(["error": message]) } else { FileHandle.standardError.write("seekzip: \(message)\n".data(using: .utf8)!) }
     exit(code)
 }
 
 guard let command = positional.first else {
-    print("usage: seekzip <list|test|extract|create> [--json] <archive> [args…]")
+    print("usage: seekzip <list|test|extract|create> [--json|--stream] <archive> [args…]")
     exit(2)
 }
 
@@ -32,7 +33,21 @@ do {
     switch command {
     case "list":
         guard positional.count >= 2 else { fail(2, "list needs an archive path") }
-        let info = try engine.list(archive: URL(fileURLWithPath: positional[1]))
+        let url = URL(fileURLWithPath: positional[1])
+        if stream {
+            // M2: one JSON object per entry, printed as it arrives; the
+            // summary goes to stderr so stdout stays pure JSON lines.
+            // If 7zz fails after some entries were printed, the exit
+            // code still reports the failure — treat a non-zero exit
+            // as an incomplete listing.
+            let info = try engine.listStreaming(archive: url) { entry in
+                emitJSON(entry)
+                return true
+            }
+            FileHandle.standardError.write("seekzip: \(info.entries.count) entries, \(info.totalUncompressed) bytes uncompressed\n".data(using: .utf8)!)
+            break
+        }
+        let info = try engine.list(archive: url)
         if json { emitJSON(info) }
         else {
             for e in info.entries {
