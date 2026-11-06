@@ -20,10 +20,11 @@ seekzip-mcp (MCP) ────┘        │
 | `SeekZipCore/ArchiveEntry.swift` | `ArchiveEntry`, `ArchiveInfo` value models (Codable — the same shapes the CLI prints as JSON and MCP returns) |
 | `SeekZipCore/ListingParser.swift` | Parses `7zz l -slt` technical listings into models |
 | `SeekZipCore/EntryPathSafety.swift` | Zip-slip / absolute-path / symlink policy, zip-bomb heuristic |
-| `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create |
+| `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create, nested listing, entry streaming |
+| `SeekZipCore/PreviewProvider.swift` | Entry previews (M3): text streams in capped at 64 KB / 200 lines, images/PDF/binary defer to Quick Look |
 | `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping |
 | `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core |
-| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract |
+| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation |
 
 ## 3. Data flow — listing an archive
 
@@ -40,7 +41,11 @@ seekzip-mcp (MCP) ────┘        │
 5. Frontends render `ArchiveInfo`. Since M2 the listing parses as a
    stream (`StreamingListingParser` + `SevenZipEngine.listStreaming`);
    the 1M-entry case still needs a virtualised UI (M3+, see TEST-MATRIX
-   PERF-04).
+   PERF-04). Since M3, nested archives list in place
+   (`SevenZipEngine.listNested` / `withNestedArchive`) and entries
+   preview without extracting (`PreviewProvider`, `streamEntry` via
+   `7zz e -so`); the GUI preview panel and nested navigation are wired
+   in code but uncompiled until the M7 Xcode project.
 
 ## 4. Data flow — extraction
 
