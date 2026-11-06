@@ -1,0 +1,7 @@
+.build/
+*.xcworkspace
+xcuserdata/
+DerivedData/
+Tests/Matrix/fixtures/
+.DS_Store
+__pycache__/
