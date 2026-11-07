@@ -64,7 +64,15 @@ chỉ mới ở dạng code, chờ Xcode project ở M7. M4 đã xong: hàng đ�
 bỉ — chạy hàng loạt extract/create/test, tạm dừng/tiếp tục/hủy, tạo
 archive qua tên tạm + đổi tên nguyên tử, kiểm tra dung lượng trống
 trước, Ctrl-C hủy sạch — qua `seekzip queue` và MCP queue tools. Panel
-queue của GUI hiện chỉ mới ở dạng code, chờ Xcode project ở M7.
+queue của GUI hiện chỉ mới ở dạng code, chờ Xcode project ở M7. M5 đã
+xong: hoàn thiện tạo/sửa — thêm, xóa và đổi tên entry trong archive
+ZIP/7z/TAR (bản sao tạm + đổi tên nguyên tử, nên sửa lỗi không bao giờ
+làm hỏng bản gốc), chuyển đổi định dạng (ZIP ↔ 7z ↔ TAR; không tạo
+được RAR), checksum CRC-32/SHA-256 cho từng entry với lệnh `verify`,
+và mật khẩu lưu trong Keychain của macOS (kênh còn lại là biến môi
+trường `SEEKZIP_PASSWORD`, không bao giờ dùng tham số `-p`). Panel
+sửa của GUI và cột CRC hiện chỉ mới ở dạng code, chờ Xcode project
+ở M7.
 
 ## Build (trên máy Mac)
 
@@ -90,8 +98,44 @@ Các job chạy lần lượt từng job một và được lưu ở
 7zz ghi vào thư mục tạm trước rồi mới đổi tên vào vị trí cuối khi xong,
 nên job bị hủy hay lỗi cũng không để lại file dở dang. Giải nén và tạo
 archive đều kiểm tra dung lượng trống trước và báo lỗi ngay khi ổ đích
-không đủ chỗ. Mật khẩu chỉ giữ trong bộ nhớ, không bao giờ ghi vào file
-hàng đợi.
+không đủ chỗ. Mật khẩu không bao giờ ghi vào file hàng đợi — lấy từ
+`SEEKZIP_PASSWORD` hoặc Keychain (xem bên dưới).
+
+## Sửa, chuyển đổi, kiểm tra
+
+```sh
+seekzip add archive.zip newfile.txt --into docs   # thêm entry (ZIP/7z/TAR)
+seekzip remove archive.zip old.txt                # xóa entry
+seekzip rename archive.zip old.txt new.txt        # đổi tên (chỉ ZIP/7z)
+seekzip convert archive.zip archive.7z            # chuyển ZIP → 7z (cả 7z → ZIP, TAR → 7z)
+seekzip verify archive.zip [--sha256]             # kiểm tra lại CRC của từng entry (và SHA-256)
+seekzip checksums archive.zip                     # CRC-32 của từng entry, lấy từ listing
+```
+
+Mọi thao tác sửa đều làm trên bản sao tạm trong cùng thư mục và chỉ
+thay thế bản gốc bằng phép đổi tên nguyên tử sau khi bản đã sửa list
+sạch — sửa lỗi thì bản gốc còn nguyên từng byte. Chuyển đổi giải nén ra
+thư mục tạm rồi tạo lại archive; tên và nội dung entry được giữ nguyên,
+còn chuyển *sang* RAR sẽ báo lỗi rõ ràng (không công cụ bên thứ ba nào
+tạo được RAR). `verify` stream từng entry, băm nó (CRC-32, thêm SHA-256
+với `--sha256`) rồi đối chiếu với CRC trong listing; entry hỏng được báo
+ra và các entry còn lại vẫn được kiểm tra tiếp.
+
+## Mật khẩu
+
+```sh
+SEEKZIP_PASSWORD=hunter2 seekzip list secret.zip  # biến môi trường (không bao giờ dùng tham số -p)
+seekzip password store secret.zip                 # lưu vào Keychain của macOS (nhập mật khẩu, 2 lần)
+seekzip password forget secret.zip                # quên mật khẩu đã lưu
+```
+
+Mật khẩu không bao giờ được truyền qua tham số dòng lệnh (nó sẽ hiện
+trong danh sách process). CLI lấy mật khẩu từ `SEEKZIP_PASSWORD` hoặc
+từ mật khẩu đã lưu — Keychain của macOS (`com.seekzip.passwords`) trong
+app và trên CLI, chỉ dùng bộ nhớ trong trên các lần chạy test Linux.
+Mật khẩu truyền trực tiếp luôn thắng mật khẩu đã lưu. MCP tools dùng
+cùng trường `password` (`add_entries`, `remove_entries`,
+`rename_entries`, `convert_archive`, `verify_archive`).
 
 Archive RAR giải nén được nhưng không tạo được — việc tạo RAR thuộc bản
 quyền proprietary (điều này đúng với mọi ứng dụng nén trên macOS).
