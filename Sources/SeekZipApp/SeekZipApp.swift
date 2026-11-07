@@ -23,8 +23,24 @@ import SeekZipCore
 // Preview and edits stay on 7zz (entry streaming and writing are
 // 7zz-only — XAD is extraction-only).
 
+/// M7: opening an archive from Finder (double-click, or the Finder
+/// Sync extension's "Open with SeekZip") delivers its URL through the
+/// app delegate; the browser picks it up via notification.
+final class SeekZipAppDelegate: NSObject, NSApplicationDelegate {
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard let url = urls.first else { return }
+        NotificationCenter.default.post(name: .seekZipOpenArchive, object: url)
+    }
+}
+
+extension Notification.Name {
+    static let seekZipOpenArchive = Notification.Name("seekzip.openArchive")
+}
+
 @main
 struct SeekZipApp: App {
+    @NSApplicationDelegateAdaptor(SeekZipAppDelegate.self) var appDelegate
+
     var body: some Scene {
         WindowGroup {
             BrowserView()
@@ -34,13 +50,20 @@ struct SeekZipApp: App {
 }
 
 /// M6: engine settings (code only — NOT compiled by SwiftPM yet).
-/// The default engine and per-format overrides live in UserDefaults,
-/// so the app and its extensions share one source of truth (the
-/// Quick Look / Finder extensions read the same keys in M7).
+/// The default engine and per-format overrides live in the App Group
+/// shared defaults (M7), so the app and its extensions share one
+/// source of truth (the Quick Look / Finder extensions read the same
+/// keys); without a packaged App Group (development builds) they fall
+/// back to the standard defaults. The group itself must be created in
+/// the Apple Developer account first — see `docs/RELEASE.md`.
 final class EngineSettings: ObservableObject {
     static let shared = EngineSettings()
-    private static let defaultKey = "seekzip.engine.default"
-    private static let overridesKey = "seekzip.engine.overrides"
+
+    /// Shared defaults: the App Group suite when available, plain
+    /// standard defaults otherwise.
+    private static var sharedDefaults: UserDefaults {
+        UserDefaults(suiteName: SeekZipAppGroup.suiteName) ?? .standard
+    }
 
     /// Legacy formats the settings sheet offers an override for.
     static let overridableFormats = [
@@ -48,20 +71,20 @@ final class EngineSettings: ObservableObject {
     ]
 
     @Published var defaultEngine: EngineSelection {
-        didSet { UserDefaults.standard.set(defaultEngine.rawValue, forKey: Self.defaultKey) }
+        didSet { Self.sharedDefaults.set(defaultEngine.rawValue, forKey: SeekZipAppGroup.defaultEngineKey) }
     }
     @Published var formatOverrides: [String: EngineID] {
         didSet {
-            UserDefaults.standard.set(formatOverrides.mapValues(\.rawValue),
-                                      forKey: Self.overridesKey)
+            Self.sharedDefaults.set(formatOverrides.mapValues(\.rawValue),
+                                      forKey: SeekZipAppGroup.formatOverridesKey)
         }
     }
 
     init() {
-        let rawDefault = UserDefaults.standard.string(forKey: Self.defaultKey)
+        let rawDefault = Self.sharedDefaults.string(forKey: SeekZipAppGroup.defaultEngineKey)
             ?? EngineSelection.auto.rawValue
         self.defaultEngine = EngineSelection(rawValue: rawDefault) ?? .auto
-        let rawOverrides = UserDefaults.standard.dictionary(forKey: Self.overridesKey)
+        let rawOverrides = Self.sharedDefaults.dictionary(forKey: SeekZipAppGroup.formatOverridesKey)
             as? [String: String] ?? [:]
         self.formatOverrides = rawOverrides.compactMapValues { EngineID(rawValue: $0) }
     }
@@ -266,6 +289,11 @@ struct BrowserView: View {
                 .padding(6)
         }
         .frame(minWidth: 640, minHeight: 420)
+        // M7: an archive opened from Finder (double-click / extension)
+        // arrives via the app delegate as a notification.
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipOpenArchive)) { note in
+            if let url = note.object as? URL { openArchive(url) }
+        }
     }
 
     /// M4: the queue panel. Jobs are persisted by `JobQueue`, so this
@@ -378,6 +406,9 @@ struct BrowserView: View {
     /// M3: open the selected entry's preview with the core provider.
     /// Text streams in (max 64 KB / 200 lines); images, PDFs and
     /// binary entries report back as "use Quick Look".
+    /// M7: the preview goes through the router, so an XAD-only
+    /// archive previews via a temporary extraction (core fallback)
+    /// instead of failing on the missing 7zz stream.
     private func togglePreview() {
         guard let archiveURL,
               let selected = selection.first,
@@ -388,8 +419,11 @@ struct BrowserView: View {
         showPreview = true
         Task {
             do {
-                let engine = try SevenZipEngine()
-                let provider = PreviewProvider(engine: engine)
+                guard let router = engineSettings.makeRouter() else {
+                    status = "No engine available"
+                    return
+                }
+                let provider = PreviewProvider(engine: router)
                 let loaded = nestedPath.isEmpty
                     ? try provider.preview(archive: archiveURL, entry: entry)
                     : try provider.previewNested(archive: archiveURL,
@@ -456,6 +490,12 @@ struct BrowserView: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        openArchive(url)
+    }
+
+    /// M7: open an archive URL directly (Finder double-click /
+    /// extension), without the file panel.
+    private func openArchive(_ url: URL) {
         archiveURL = url
         nestedPath = []
         preview = nil
