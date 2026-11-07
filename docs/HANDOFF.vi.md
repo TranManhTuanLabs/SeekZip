@@ -39,6 +39,17 @@ trạng thái thay đổi đáng kể — ngữ cảnh của agent tiếp theo b
   100k entry và test hủy bằng binary giả lập. Chưa chạy fixture 10 GB /
   1M entry đầy đủ (PERF-01/04) trên CI — fixture nặng, sẽ thêm sau nếu có
   thời gian CI cho phép.
+- **M3 đã xong**: xem trước + archive lồng nhau — `PreviewProvider`
+  (text stream vào qua `7zz e -so`, giới hạn 64 KB / 200 dòng, an toàn
+  UTF-8, phát hiện binary bằng byte NUL; ảnh/PDF/file nhị phân giao cho
+  Quick Look), `SevenZipEngine.listNested` / `withNestedArchive` (giải
+  nén vào thư mục tạm qua `EntryPathSafety`, chuỗi 3 cấp NES-01), CLI
+  `preview` và `list outer.zip inner.zip` (xem trước entry lồng nhau dạng
+  `preview outer.zip "inner.zip!/file.txt"`). 30 unit test pass (16 test
+  mới, dùng binary giả lập). Panel xem trước + điều hướng lồng nhau của
+  GUI đã nối code trong `Sources/SeekZipApp/` nhưng CHƯA biên dịch bằng
+  SwiftPM/CI (cần Xcode đầy đủ); panel Quick Look native (QLPreviewPanel)
+  sẽ làm cùng Xcode project ở M7.
 - Các quyết định về engine đã chốt: 7zz là engine chính, XADMaster làm
   dự phòng trong phase 2, libarchive hoãn lại — lý do nằm trong
   `docs/REFERENCE.md`.
@@ -102,8 +113,9 @@ ngôn ngữ còn lại trong cùng commit** — hoặc, nếu không thể, thê
 - Listing stream từ `7zz` từ M2 (v0.1 còn đệm trong bộ nhớ).
 - CLI chưa có cờ `-p`; password hoạt động qua Core API và MCP.
 - Giải nén chưa kiểm tra dung lượng trống trước và chưa dùng tên tạm.
-- GUI là khung xương: chưa có xem trước, tab, hàng đợi hay kéo-thả ra
-  ngoài.
+- GUI là khung xương: panel xem trước + điều hướng lồng nhau đã nối code
+  (M3) nhưng chưa biên dịch cho tới Xcode project ở M7; chưa có tab, hàng
+  đợi hay kéo-thả ra ngoài.
 - Password truyền cho `7zz` qua `-p` hiển thị trong danh sách tiến trình
   của máy local (rủi ro đã chấp nhận và ghi nhận).
 
