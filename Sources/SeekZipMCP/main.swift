@@ -4,9 +4,10 @@ import SeekZipCore
 // seekzip-mcp — MCP server (stdio, newline-delimited JSON-RPC 2.0).
 // A thin schema layer over SeekZipCore: AI assistants get typed, safe
 // tools instead of parsing terminal output. Tools:
-//   list_archive    { path, password? }
-//   test_archive    { path, password? }
-//   extract_entries { path, destination, entries?, password? }
+//   list_archive    { path, password?, engine? }  (engine: auto|7zz|xad)
+//   test_archive    { path, password?, engine? }
+//   extract_entries { path, destination, entries?, password?, engine? }
+//   list_engines    {}  — engines and the formats each covers
 //   create_archive  { path, sources, format?, password? }
 //   queue_enqueue   { kind, archive, destination?, entries?, sources?, format?, password? }
 //   queue_list      {}
@@ -16,6 +17,8 @@ import SeekZipCore
 //   rename_entries  { path, from, to, password? }  (from/to are parallel arrays)
 //   convert_archive { path, destination, format?, password? }
 //   verify_archive  { path, entries?, sha256?, password? }
+// Responses for list/test/extract name the engine that handled the
+// archive (`ArchiveInfo.engine` for lists, "(engine: …)" for the rest).
 // Queue jobs are persisted (M4, PERF-06) and run on a background
 // thread; enqueue returns immediately with the job id.
 
@@ -58,23 +61,27 @@ func toolResult(id: Int?, _ text: String, isError: Bool = false) {
 
 let toolDefs: [[String: Any]] = [
     ["name": "list_archive",
-     "description": "List entries of an archive (streaming, safe for very large archives).",
+     "description": "List entries of an archive (streaming, safe for very large archives). engine: auto (7zz first, XAD fallback), 7zz or xad.",
      "inputSchema": ["type": "object",
-                     "properties": ["path": ["type": "string"], "password": ["type": "string"]],
+                     "properties": ["path": ["type": "string"], "password": ["type": "string"], "engine": ["type": "string"]],
                      "required": ["path"]]],
     ["name": "test_archive",
-     "description": "Verify archive integrity (CRC test).",
+     "description": "Verify archive integrity (CRC test). engine: auto, 7zz or xad.",
      "inputSchema": ["type": "object",
-                     "properties": ["path": ["type": "string"], "password": ["type": "string"]],
+                     "properties": ["path": ["type": "string"], "password": ["type": "string"], "engine": ["type": "string"]],
                      "required": ["path"]]],
     ["name": "extract_entries",
-     "description": "Extract selected entries (or all) with zip-slip protection.",
+     "description": "Extract selected entries (or all) with zip-slip protection. engine: auto, 7zz or xad.",
      "inputSchema": ["type": "object",
                      "properties": ["path": ["type": "string"],
                                     "destination": ["type": "string"],
                                     "entries": ["type": "array", "items": ["type": "string"]],
-                                    "password": ["type": "string"]],
+                                    "password": ["type": "string"],
+                                    "engine": ["type": "string"]],
                      "required": ["path", "destination"]]],
+    ["name": "list_engines",
+     "description": "List the engines (7zz and XAD) and which formats each covers, and whether each is installed.",
+     "inputSchema": ["type": "object", "properties": [:]]],
     ["name": "create_archive",
      "description": "Create a ZIP or 7z archive from files/folders.",
      "inputSchema": ["type": "object",
@@ -153,15 +160,23 @@ let toolDefs: [[String: Any]] = [
                      "required": ["path"]]],
 ]
 
-let engine = try? SevenZipEngine()
+/// M6: the router owns both engines. A missing 7zz becomes an
+/// unavailable placeholder (so `list_engines` still reports it);
+/// XAD is always present as an object but reports unavailable
+/// without its binaries.
+let sevenZip: any ArchiveEngine = (try? SevenZipEngine())
+    ?? UnavailableEngine(id: .sevenZip,
+                         capabilities: SevenZipEngine.engineCapabilities)
+let xad = XADMasterEngine()
+let engine = EngineRouter(engines: [sevenZip, xad])
 
-/// The shared persistent queue (M4). Created from the same engine so
-/// MCP jobs use the same store file as `seekzip queue` on the CLI.
-let sharedQueue: JobQueue? = engine.map { JobQueue(engine: $0) }
+/// The shared persistent queue (M4). Created from the router so MCP
+/// jobs use the same store file as `seekzip queue` on the CLI — and
+/// queued extracts route across engines too.
+let sharedQueue = JobQueue(engine: engine)
 
 /// Starts the background runner (a no-op when one is already active).
 func kickQueue() {
-    guard let sharedQueue else { return }
     DispatchQueue.global(qos: .utility).async { sharedQueue.runAll() }
 }
 
@@ -183,11 +198,20 @@ while let line = readLine() {
     case "tools/list":
         result(id: request.id, ["tools": toolDefs])
     case "tools/call":
-        guard let engine, let name = request.params?.name else {
-            toolResult(id: request.id, "engine unavailable (7zz not found)", isError: true)
+        guard let name = request.params?.name else {
+            toolResult(id: request.id, "missing tool name", isError: true)
             continue
         }
         let a = request.params?.arguments ?? [:]
+        // M6: a per-call engine selection ("auto"|"7zz"|"xad"); the
+        // router goes back to auto when the call returns. Requests
+        // are handled one at a time, so this is safe.
+        let previousSelection = engine.defaultSelection
+        if let raw = a["engine"]?.string,
+           let selection = EngineSelection(rawValue: raw) {
+            engine.defaultSelection = selection
+        }
+        defer { engine.defaultSelection = previousSelection }
         do {
             switch name {
             case "list_archive":
@@ -195,16 +219,18 @@ while let line = readLine() {
                                            password: a["password"]?.string)
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
                 toolResult(id: request.id, String(decoding: try encoder.encode(info), as: UTF8.self))
+            case "list_engines":
+                toolResult(id: request.id, encodeJSON(engine.summaries()))
             case "test_archive":
                 try engine.test(archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
                                 password: a["password"]?.string)
-                toolResult(id: request.id, "Everything is Ok")
+                toolResult(id: request.id, "Everything is Ok (engine: \(engine.lastEngine?.rawValue ?? "?"))")
             case "extract_entries":
                 try engine.extract(archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
                                    entries: a["entries"]?.array,
                                    to: URL(fileURLWithPath: a["destination"]?.string ?? ""),
                                    password: a["password"]?.string)
-                toolResult(id: request.id, "Extracted")
+                toolResult(id: request.id, "Extracted (engine: \(engine.lastEngine?.rawValue ?? "?"))")
             case "create_archive":
                 try engine.create(archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
                                   sources: (a["sources"]?.array ?? []).map { URL(fileURLWithPath: $0) },
@@ -212,15 +238,11 @@ while let line = readLine() {
                                   password: a["password"]?.string)
                 toolResult(id: request.id, "Created")
             case "queue_enqueue":
-                guard let queue = sharedQueue else {
-                    toolResult(id: request.id, "queue unavailable (7zz not found)", isError: true)
-                    continue
-                }
                 guard let kind = JobKind(rawValue: a["kind"]?.string ?? "") else {
                     toolResult(id: request.id, "kind must be extract, create or test", isError: true)
                     continue
                 }
-                let record = queue.enqueue(JobDescriptor(
+                let record = sharedQueue.enqueue(JobDescriptor(
                     kind: kind, archive: a["archive"]?.string ?? "",
                     destination: a["destination"]?.string,
                     entries: a["entries"]?.array,
@@ -230,25 +252,17 @@ while let line = readLine() {
                 kickQueue()
                 toolResult(id: request.id, encodeJSON(record))
             case "queue_list":
-                guard let queue = sharedQueue else {
-                    toolResult(id: request.id, "queue unavailable (7zz not found)", isError: true)
-                    continue
-                }
-                toolResult(id: request.id, encodeJSON(queue.jobs()))
+                toolResult(id: request.id, encodeJSON(sharedQueue.jobs()))
             case "queue_pause", "queue_resume", "queue_cancel":
-                guard let queue = sharedQueue else {
-                    toolResult(id: request.id, "queue unavailable (7zz not found)", isError: true)
-                    continue
-                }
-                guard let record = queue.record(matching: a["id"]?.string ?? "") else {
+                guard let record = sharedQueue.record(matching: a["id"]?.string ?? "") else {
                     toolResult(id: request.id, "no such job (or ambiguous id)", isError: true)
                     continue
                 }
                 let ok: Bool
                 switch name {
-                case "queue_pause": ok = queue.pause(id: record.id)
-                case "queue_resume": ok = queue.resume(id: record.id)
-                default: ok = queue.cancel(id: record.id)
+                case "queue_pause": ok = sharedQueue.pause(id: record.id)
+                case "queue_resume": ok = sharedQueue.resume(id: record.id)
+                default: ok = sharedQueue.cancel(id: record.id)
                 }
                 guard ok else {
                     toolResult(id: request.id,
@@ -256,7 +270,7 @@ while let line = readLine() {
                     continue
                 }
                 toolResult(id: request.id,
-                           encodeJSON(queue.record(for: record.id)!))
+                           encodeJSON(sharedQueue.record(for: record.id)!))
             case "add_entries":
                 try engine.addEntries(
                     archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
