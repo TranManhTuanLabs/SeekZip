@@ -33,6 +33,17 @@
   `list --stream`（JSON 行）。14 个单元测试通过，包括 10 万条目流式
   测试和脚本化二进制取消测试。尚未在 CI 上运行完整的 10 GB / 100 万条
   目夹具（PERF-01/04）——夹具很重，如 CI 时间允许再添加。
+- **M3 已完成**：预览 + 嵌套归档——`PreviewProvider`（文本经
+  `7zz e -so` 流式读入，上限 64 KB / 200 行，UTF-8 安全，以 NUL 字节
+  检测二进制；图片/PDF/二进制文件交由 Quick Look）、
+  `SevenZipEngine.listNested` / `withNestedArchive`（经
+  `EntryPathSafety` 解压到临时目录，NES-01 三层链），CLI `preview` 与
+  `list outer.zip inner.zip`（嵌套预览为
+  `preview outer.zip "inner.zip!/file.txt"`）。30 个单元测试通过
+  （16 个新增，脚本化二进制）。GUI 预览面板 + 嵌套导航已在
+  `Sources/SeekZipApp/` 中接线，但仅为代码——SwiftPM/CI 不编译
+  （需要完整 Xcode）；原生 Quick Look 面板（QLPreviewPanel）随 M7
+  的 Xcode 工程落地。
 - 引擎决策已定：7zz 为主引擎，XADMaster 后备引擎在
   第二阶段引入，libarchive 推迟——理由见 `docs/REFERENCE.md`。
 
@@ -87,7 +98,8 @@
 - 自 M2 起列表从 `7zz` 流式读取（v0.1 是缓存在内存中）。
 - CLI 尚无 `-p` 标志；密码可通过 Core API 和 MCP 使用。
 - 解压尚未进行可用空间预检查或临时名称暂存。
-- GUI 只是骨架：尚无预览、标签页、队列或拖出功能。
+- GUI 只是骨架：预览面板 + 嵌套导航已接线（M3），但需待 M7 的 Xcode
+  工程才能编译；尚无标签页、队列或拖出功能。
 - 通过 `-p` 传给 `7zz` 的密码在本地进程列表中可见（已接受并记录的
   风险）。
 
