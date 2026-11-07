@@ -14,7 +14,7 @@ Updated after every milestone. Agent times come from the runtime
 | M2 — Streaming listing | 05:00 → 06:28 | ~1h28m | 14 commits. 2 pushes stalled because approval cards expired and had to be retried. |
 | M3 — Preview + nested | 06:28 → 07:03 | ~35m | 18 commits. |
 | M4 — Queue | 07:05 → 07:22 | ~17m | 12 commits. Pushed the old way (one file at a time, approvals spread out). |
-| M5 — Create/edit polish | started 07:22 | — | New push policy: work locally, push once per milestone. |
+| M5 — Create/edit polish | 07:22 → 07:37 local work done; batch push + CI check after | ~15m local work | 14 files in one batch push (2 new: Checksums.swift, PasswordStore.swift). Local: swift test 67/67 green, swift build green. Push/approval/CI times added after CI goes green. |
 
 ## Approval waiting time (measured sample, latest history page, 20 approvals)
 
