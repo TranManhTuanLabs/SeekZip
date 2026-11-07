@@ -70,6 +70,36 @@ runner, never committed.
 - PRV-03 Encrypted entry without a password: clean "needs password" verdict
 - PRV-04 Entry inside a 2-level nested archive previews (via `listNested`)
 - PRV-05 Preview of a huge entry never decompresses it in full (stream stops at the limit)
+- PRV-06 Preview of an entry in an XAD-only archive (e.g. StuffIt):
+  extracts just that entry to a temp dir and reads the capped head
+  (same 64 KB / 200-line rules); a failed extract reports the original
+  streaming error; traversal entries are blocked (M7)
+
+## Packaging & extensions (PAK) — M7, manual (not in CI)
+
+The Xcode project has never been built in CI (no signing identity,
+no Xcode project step in ci.yml yet — see docs/RELEASE.md §7).
+These cases run by hand on the Mac after the first build:
+
+- PAK-01 `xcodebuild -project SeekZip.xcodeproj -scheme SeekZip
+  -configuration Debug build CODE_SIGNING_ALLOWED=NO` succeeds
+  (unsigned smoke build)
+- PAK-02 `scripts/package-engines.sh` stages 7zz (SHA-256 verified)
+  + License.txt + lsar/unar into build/Helpers
+- PAK-03 Release archive + export + notarise + staple
+  (`scripts/release.sh`): `spctl --assess` passes, no Gatekeeper
+  warning on a fresh account
+- PAK-04 Bundled helpers run inside the sandbox: extract a ZIP and a
+  StuffIt archive in the app (engines from
+  `SeekZip.app/Contents/Resources/Helpers/`)
+- PAK-05 Finder Sync extension: menu "Open with SeekZip" /
+  "Extract Here" appears in Finder; Quick Look (Space) shows the
+  entry listing for a ZIP and a StuffIt archive
+- PAK-06 Engine setting changed in the app is honoured by Quick Look
+  (App Group sharing works)
+- PAK-07 Homebrew: `brew install --cask seekzip` and
+  `brew install seekzip` from the tap install and run
+  (`seekzip engines` exits 0)
 
 ## Filenames & encodings (NAM)
 - NAM-01 UTF-8 names with Vietnamese diacritics and emoji
