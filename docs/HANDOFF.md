@@ -48,6 +48,18 @@ the next agent's context starts here.
   wired in `Sources/SeekZipApp/` as code only — NOT compiled by
   SwiftPM/CI (needs full Xcode); the native QLPreviewPanel itself
   lands with the M7 Xcode project.
+- **M4 done**: persistent job queue — `JobQueue` (sequential, state in
+  `~/Library/Application Support/SeekZip/queue.json`, atomic writes;
+  running jobs become `.interrupted` on relaunch, paused jobs stay
+  paused), `JobControl` (pause = SIGSTOP, resume = SIGCONT, cancel =
+  SIGTERM on the live `7zz`), safe creation (staging dir + POSIX
+  rename into place, PERF-05), free-space precheck before extract /
+  create (`EngineError.insufficientDiskSpace`), `7zz -bsp1` progress
+  for extract/create/test, CLI `queue add/list/pause/resume/cancel/run`
+  plus Ctrl-C cancelling the running job, MCP `queue_*` tools, GUI
+  queue panel in `Sources/SeekZipApp/` as code only (uncompiled until
+  M7). 44 unit tests pass (14 new). Passwords are kept in memory only
+  and never written to the queue file.
 - Engine decisions are settled: 7zz primary, XADMaster fallback in
   phase 2, libarchive deferred — rationale in `docs/REFERENCE.md`.
 
@@ -107,10 +119,12 @@ versions disagree.
 
 - Listing streams from `7zz` since M2 (was buffered in memory in v0.1).
 - CLI has no `-p` flag yet; passwords work via Core API and MCP.
-- Extraction does not yet do free-space precheck or temp-name staging.
+- Creation uses temp staging + atomic rename since M4; extraction
+  has a free-space precheck since M4 (a cancelled extract may leave
+  partially extracted entries — re-running overwrites them with `-y`).
 - GUI is a skeleton: preview panel + nested navigation are wired in
-  code (M3) but uncompiled until the M7 Xcode project; no tabs, queue,
-  or drag-out yet.
+  code (M3), queue panel wired in code (M4), all uncompiled until the
+  M7 Xcode project; no tabs or drag-out yet.
 - Passwords passed to `7zz` via `-p` are visible in the local process
   list (accepted, documented risk).
 
