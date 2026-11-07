@@ -23,14 +23,17 @@ seekzip-mcp (MCP) ────┘        │
 | `SeekZipCore/ListingParser.swift` | Parses `7zz l -slt` technical listings into models |
 | `SeekZipCore/EntryPathSafety.swift` | Zip-slip / absolute-path / symlink policy, zip-bomb heuristic |
 | `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create, nested listing, entry streaming; cancellable/pausable runs with `-bsp1` progress (M4), temp-staged atomic creation (M4); edit in place — add/remove/rename (M5), convert (M5), `entryChecksums`/`verify` (M5) |
-| `SeekZipCore/PreviewProvider.swift` | Entry previews (M3): text streams in capped at 64 KB / 200 lines, images/PDF/binary defer to Quick Look |
+| `SeekZipCore/PreviewProvider.swift` | Entry previews (M3): text streams in capped at 64 KB / 200 lines, images/PDF/binary defer to Quick Look; M7: takes any `ArchiveEngine` (the router) and falls back to extracting one entry to a temp dir when the handling engine cannot stream (XAD) |
+| `SeekZipCore/AppBundle.swift` | Packaging constants (M7): `SeekZipAppGroup` (App Group suite + shared defaults keys) and `BundledEngines` (bundled-helper lookup in `Resources/Helpers/`, incl. the containing app for extensions) |
 | `SeekZipCore/JobControl.swift` | Pause (SIGSTOP) / resume (SIGCONT) / cancel (SIGTERM) handle for a running `7zz` process, plus `JobProgress` (M4) |
 | `SeekZipCore/JobQueue.swift` | Persistent sequential job queue (M4): `JobDescriptor`/`JobRecord`, atomic JSON store, `DiskSpace` free-space precheck. Runs on any `ArchiveEngine` (M6: the router, so queued extracts route too) |
 | `SeekZipCore/Checksums.swift` | Pure-Swift CRC-32 (IEEE) and SHA-256 (FIPS 180-4), one-shot + streaming accumulators (M5) — no CryptoKit, so it runs on the Linux test toolchain too |
 | `SeekZipCore/PasswordStore.swift` | `PasswordStoring` protocol; Keychain on macOS (Security framework, service `com.seekzip.passwords`) and an in-memory fallback on Linux, tests only (M5) |
-| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping, `queue` subcommands, Ctrl-C via DispatchSource (M4); `add`/`remove`/`rename`/`convert`/`verify`/`checksums`/`password` subcommands, `SEEKZIP_PASSWORD` (M5); `--engine auto\|7zz\|xad` + `engines` command (M6) |
+| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping, `queue` subcommands, Ctrl-C via DispatchSource (M4); `add`/`remove`/`rename`/`convert`/`verify`/`checksums`/`password` subcommands, `SEEKZIP_PASSWORD` (M5); `--engine auto\|7zz\|xad` + `engines` command (M6); `preview` goes through the router (M7) |
 | `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core; `queue_*` tools on a background runner (M4); `add_entries`/`remove_entries`/`rename_entries`/`convert_archive`/`verify_archive` (M5); `engine` argument on list/test/extract + `list_engines` (M6) |
-| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation, queue panel (M4), edit row + CRC column (M5), engine settings + "handled by" label (M6) |
+| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation, queue panel (M4), edit row + CRC column (M5), engine settings + "handled by" label (M6), App Group shared defaults + Finder double-click open (M7) |
+| `SeekZipFinderSync/FinderSync.swift` | Finder Sync extension (M7): contextual menu (Open with SeekZip / Extract Here) + archive badges; routes through Core, reads App Group settings |
+| `SeekZipQuickLook/PreviewViewController.swift` | Quick Look preview extension (M7): entry listing for the archive, routed; reads App Group settings |
 
 ## 3. Data flow — listing an archive
 
@@ -107,7 +110,11 @@ response, `list_engines` tool). Create/edit/verify/streaming stay on
 and creates through 7zz, so a legacy archive can be the source.
 `listNested`/`withNestedArchive` are protocol-extension methods
 built on `list`/`extract`, so nesting routes too. libarchive is
-deferred (no 7z/RAR decryption, no multi-volume).
+deferred (no 7z/RAR decryption, no multi-volume). Entry streaming
+stays 7zz-only at the engine level; `PreviewProvider` (M7) falls back
+to extracting one entry to a temp dir when the handling engine cannot
+stream, so XAD-only archives preview too — the fallback rethrows the
+original streaming error when extraction also fails.
 
 ## 6. Frontend contracts
 
@@ -155,6 +162,19 @@ jobs on a background thread (M4).
    failed or cancelled XAD extract leaves no partial output.
 5. **Clean-room**: behaviour and public contracts may be learned from
    reference projects; code may not be copied (MacPacker is GPL-3.0).
+6. **Bundled engines**: the packaged app resolves its engines from
+   `Resources/Helpers/` first (`BundledEngines`: app bundle, or the
+   containing app for extensions), then the well-known PATH locations.
+   Helpers are signed with the inherit entitlement so they run inside
+   the app sandbox; the 7zz tarball is SHA-256-pinned in
+   `scripts/package-engines.sh` and re-verified on every staging.
+7. **Two build systems, one source tree**: SwiftPM builds core + CLI +
+   MCP + tests (`swift build` / `swift test`, also in CI); the Xcode
+   project builds the app + extensions and links the same
+   `Sources/SeekZipCore/` files as a static-library target. When a
+   file is added to `SeekZipCore`, add it to the Xcode target too (the
+   validator `scripts/validate-xcodeproj.py` fails otherwise); never
+   add the GUI back into `Package.swift` (SwiftUIMacros needs Xcode).
 
 ## 8. Decision log
 
@@ -163,4 +183,7 @@ jobs on a background thread (M4).
 | Subprocess `7zz` instead of linking a library | Only engine with create/edit/test + header-encrypted 7z + RAR5; process isolation is also a security boundary against crafted archives |
 | CLI in v1, MCP as thin layer on Core | CLI is the CI/test-matrix surface and the stable contract; MCP adds schemas, not new logic |
 | SwiftPM package for everything | Builds/tests with one command locally and in CI; Xcode project arrives with extensions/signing |
+| Xcode project links Core as a static library | One source tree, two build systems; avoids an embedded framework (no rpath juggling for extensions) and keeps `swift build`/`swift test` untouched; the trade-off is the file list lives in two places (validator enforces it) |
+| Engines bundled in `Resources/Helpers/`, inherit entitlement | Helpers run inside the app sandbox; staged + SHA-256-verified by script, signed in the Xcode "Bundle Engines" phase |
+| App Group for shared engine settings | One source of truth for the app + both extensions (MacPacker pattern, behaviour-level only); placeholder group id until the owner creates theirs |
 | Passwords via `-p` argument | 7zz's only non-interactive channel; known trade-off: visible in the process list on the same machine (documented risk, REFERENCE.md §5) |
