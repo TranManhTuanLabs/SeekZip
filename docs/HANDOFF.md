@@ -92,15 +92,16 @@ the next agent's context starts here.
 7. **M7 — Extensions & packaging**: Finder + Quick Look extensions,
    bundled signed 7zz, notarised release, Homebrew cask.
 
-## 6. Trilingual documentation rule
+## 6. Documentation language rule
 
-`README.md` and `docs/BUILD_FROM_ZERO.md`, `docs/ARCHITECTURE.md`,
-`docs/HANDOFF.md`, `docs/TEST-MATRIX.md` exist in three content-identical
-versions: English (no suffix), Vietnamese (`.vi.md`), Simplified Chinese
-(`.zh-CN.md`). **When you edit one language, update the other two in the
-same commit** — or, if you cannot, add a `> ⚠️ Translation may be stale`
-note to the outdated files and flag it in §2. English is the source of
-truth when versions disagree.
+Only `README.md` is trilingual: English (no suffix), Vietnamese
+(`README.vi.md`), Simplified Chinese (`README.zh-CN.md`). When you edit
+the README, update all three in the same commit. All other docs in
+`docs/` are English only. The older `.vi.md` / `.zh-CN.md` versions of
+`BUILD_FROM_ZERO.md`, `ARCHITECTURE.md`, `HANDOFF.md` and `TEST-MATRIX.md`
+remain in the repo for reference but are frozen — do not update them and
+do not create new translations. English is the source of truth when
+versions disagree.
 
 ## 7. Known limitations (v0.1)
 
