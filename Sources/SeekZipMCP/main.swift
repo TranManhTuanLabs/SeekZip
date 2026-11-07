@@ -8,6 +8,11 @@ import SeekZipCore
 //   test_archive    { path, password? }
 //   extract_entries { path, destination, entries?, password? }
 //   create_archive  { path, sources, format?, password? }
+//   queue_enqueue   { kind, archive, destination?, entries?, sources?, format?, password? }
+//   queue_list      {}
+//   queue_pause / queue_resume / queue_cancel { id }
+// Queue jobs are persisted (M4, PERF-06) and run on a background
+// thread; enqueue returns immediately with the job id.
 
 struct RPCRequest: Decodable {
     let id: Int?
@@ -73,9 +78,55 @@ let toolDefs: [[String: Any]] = [
                                     "format": ["type": "string"],
                                     "password": ["type": "string"]],
                      "required": ["path", "sources"]]],
+    ["name": "queue_enqueue",
+     "description": "Enqueue an extract/create/test job; it runs on a background thread and survives restarts. Returns the job record.",
+     "inputSchema": ["type": "object",
+                     "properties": ["kind": ["type": "string"],
+                                    "archive": ["type": "string"],
+                                    "destination": ["type": "string"],
+                                    "entries": ["type": "array", "items": ["type": "string"]],
+                                    "sources": ["type": "array", "items": ["type": "string"]],
+                                    "format": ["type": "string"],
+                                    "password": ["type": "string"]],
+                     "required": ["kind", "archive"]]],
+    ["name": "queue_list",
+     "description": "List persisted queue jobs with their status and progress.",
+     "inputSchema": ["type": "object", "properties": [:]]],
+    ["name": "queue_pause",
+     "description": "Pause a queued or running job (id or unique prefix).",
+     "inputSchema": ["type": "object",
+                     "properties": ["id": ["type": "string"]],
+                     "required": ["id"]]],
+    ["name": "queue_resume",
+     "description": "Resume a paused or interrupted job.",
+     "inputSchema": ["type": "object",
+                     "properties": ["id": ["type": "string"]],
+                     "required": ["id"]]],
+    ["name": "queue_cancel",
+     "description": "Cancel a queued, paused or running job.",
+     "inputSchema": ["type": "object",
+                     "properties": ["id": ["type": "string"]],
+                     "required": ["id"]]],
 ]
 
 let engine = try? SevenZipEngine()
+
+/// The shared persistent queue (M4). Created from the same engine so
+/// MCP jobs use the same store file as `seekzip queue` on the CLI.
+let sharedQueue: JobQueue? = engine.map { JobQueue(engine: $0) }
+
+/// Starts the background runner (a no-op when one is already active).
+func kickQueue() {
+    guard let sharedQueue else { return }
+    DispatchQueue.global(qos: .utility).async { sharedQueue.runAll() }
+}
+
+func encodeJSON<T: Encodable>(_ value: T) -> String {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.sortedKeys]
+    return (try? encoder.encode(value))
+        .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+}
 
 while let line = readLine() {
     guard let data = line.data(using: .utf8),
@@ -116,6 +167,52 @@ while let line = readLine() {
                                   format: a["format"]?.string ?? "zip",
                                   password: a["password"]?.string)
                 toolResult(id: request.id, "Created")
+            case "queue_enqueue":
+                guard let queue = sharedQueue else {
+                    toolResult(id: request.id, "queue unavailable (7zz not found)", isError: true)
+                    continue
+                }
+                guard let kind = JobKind(rawValue: a["kind"]?.string ?? "") else {
+                    toolResult(id: request.id, "kind must be extract, create or test", isError: true)
+                    continue
+                }
+                let record = queue.enqueue(JobDescriptor(
+                    kind: kind, archive: a["archive"]?.string ?? "",
+                    destination: a["destination"]?.string,
+                    entries: a["entries"]?.array,
+                    sources: a["sources"]?.array,
+                    format: a["format"]?.string),
+                    password: a["password"]?.string)
+                kickQueue()
+                toolResult(id: request.id, encodeJSON(record))
+            case "queue_list":
+                guard let queue = sharedQueue else {
+                    toolResult(id: request.id, "queue unavailable (7zz not found)", isError: true)
+                    continue
+                }
+                toolResult(id: request.id, encodeJSON(queue.jobs()))
+            case "queue_pause", "queue_resume", "queue_cancel":
+                guard let queue = sharedQueue else {
+                    toolResult(id: request.id, "queue unavailable (7zz not found)", isError: true)
+                    continue
+                }
+                guard let record = queue.record(matching: a["id"]?.string ?? "") else {
+                    toolResult(id: request.id, "no such job (or ambiguous id)", isError: true)
+                    continue
+                }
+                let ok: Bool
+                switch name {
+                case "queue_pause": ok = queue.pause(id: record.id)
+                case "queue_resume": ok = queue.resume(id: record.id)
+                default: ok = queue.cancel(id: record.id)
+                }
+                guard ok else {
+                    toolResult(id: request.id,
+                               "cannot \(name) job in state \(record.status.rawValue)", isError: true)
+                    continue
+                }
+                toolResult(id: request.id,
+                           encodeJSON(queue.record(for: record.id)!))
             default:
                 toolResult(id: request.id, "unknown tool: \(name)", isError: true)
             }
