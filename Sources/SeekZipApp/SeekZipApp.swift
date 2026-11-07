@@ -222,7 +222,7 @@ struct BrowserView: View {
                     .padding(.horizontal, 8)
             }
 
-            if let warning = info.flatMap(EntryPathSafety.bombWarning) {
+            if let warning = info.flatMap({ EntryPathSafety.bombWarning(for: $0) }) {
                 Text("⚠️ \(warning)")
                     .foregroundStyle(.orange)
                     .frame(maxWidth: .infinity, alignment: .leading)
