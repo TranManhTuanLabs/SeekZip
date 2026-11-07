@@ -36,6 +36,18 @@ Updated after every milestone. Agent times come from the runtime
 - M1 needed 8 CI runs to go green (4 red: code errors / CI script). M2/M3 ran
   CI several times each; only the final green run counts as done.
 
+## CI flakiness (M5 batch, 2026-11-07)
+
+- 15 runs fired (one per pushed commit). 4 failed at the "Unit tests"
+  step: 41cfbca, 1ebf5d2, b152d41, 0bb9fee. Each failed run's code is a
+  subset of — or identical to, except docs — a neighbouring green run
+  (e.g. 0bb9fee differs from green 056a41b only in this file), so these
+  are flaky runs, not regressions. Local `swift test` passes 67/67
+  three times in a row. Likely a timing-sensitive test on a loaded
+  runner (several queue/cancel tests use sleeps and 5 s timeouts).
+  If a run goes red on unit tests with no code change, re-run it
+  before investigating the code.
+
 ## Push policy change (decided 2026-11-07)
 
 Before M5, every file was pushed as its own commit with its own approval card,
