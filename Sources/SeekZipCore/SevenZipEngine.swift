@@ -8,6 +8,7 @@ public enum EngineError: Error, CustomStringConvertible {
     case failed(exitCode: Int32, message: String)
     case wrongPassword
     case cancelled
+    case insufficientDiskSpace(needed: UInt64, available: UInt64)
 
     public var description: String {
         switch self {
@@ -15,6 +16,8 @@ public enum EngineError: Error, CustomStringConvertible {
         case .failed(let code, let msg): return "7zz exited \(code): \(msg)"
         case .wrongPassword: return "wrong password or corrupted archive"
         case .cancelled: return "listing cancelled"
+        case .insufficientDiskSpace(let needed, let available):
+            return "not enough free space: need \(needed) bytes, have \(available)"
         }
     }
 }
@@ -54,10 +57,26 @@ public final class SevenZipEngine: @unchecked Sendable {
         throw EngineError.binaryNotFound
     }
 
-    private func run(_ arguments: [String]) throws -> (Int32, String) {
+    /// Runs `7zz` with a cancellable, pausable process (M4). The
+    /// process is attached to `control` (if given) so `cancel()` sends
+    /// SIGTERM and `pause()`/`resume()` send SIGSTOP/SIGCONT. With
+    /// `onProgress`, `-bsp1` is added and the percent figures 7zz
+    /// prints are reported as fractions; without it, no progress
+    /// switch is added and the call behaves exactly like before.
+    /// Output is kept as a 4 KB rolling tail only — callers use
+    /// `lastLine(of:)` for the error text. Throws
+    /// `EngineError.cancelled` when the control cancels, even if 7zz
+    /// also exited non-zero.
+    private func run(_ arguments: [String], control: JobControl? = nil,
+                     onProgress: ((JobProgress) -> Void)? = nil) throws -> (Int32, String) {
+        var args = arguments
+        // Switches go right after the command, before any paths: 7zz
+        // parses them positionally, and a path could itself start with
+        // a dash in theory.
+        if onProgress != nil { args.insert("-bsp1", at: 1) }
         let process = Process()
         process.executableURL = binaryURL
-        process.arguments = arguments
+        process.arguments = args
         // Never let 7zz prompt on stdin (e.g. "Enter password"): with no
         // terminal attached that prompt would block forever. EOF makes it
         // fail fast instead, and callers pass -p explicitly when needed.
@@ -66,10 +85,62 @@ public final class SevenZipEngine: @unchecked Sendable {
         let out = Pipe()
         process.standardOutput = out
         process.standardError = out
+        control?.attach(process)
+        defer { control?.detach() }
         try process.run()
-        let data = out.fileHandleForReading.readDataToEndOfFile()
+
+        // POSIX read() — see listStreaming: Foundation's read helpers
+        // loop until the buffer is full, which would hide progress and
+        // make cancel sluggish.
+        let fd = out.fileHandleForReading.fileDescriptor
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        var tail = Data()
+        var lastPercent: Int?
+        while true {
+            if control?.isCancelled == true { break }
+            let count = read(fd, &buffer, buffer.count)
+            if count < 0 {
+                if errno == EINTR { continue }
+                break
+            }
+            if count == 0 { break } // EOF
+            let chunk = Data(buffer[0..<count])
+            tail.append(chunk)
+            if tail.count > 4096 { tail.removeFirst(tail.count - 4096) }
+            if let onProgress {
+                let text = String(decoding: chunk, as: UTF8.self)
+                if let percent = Self.lastPercent(in: text),
+                   percent != lastPercent {
+                    lastPercent = percent
+                    onProgress(JobProgress(fraction: Double(percent) / 100.0,
+                                           message: ""))
+                }
+            }
+        }
+        if control?.isCancelled == true {
+            process.terminate()
+            process.waitUntilExit()
+            throw EngineError.cancelled
+        }
         process.waitUntilExit()
-        return (process.terminationStatus, String(decoding: data, as: UTF8.self))
+        return (process.terminationStatus, String(decoding: tail, as: UTF8.self))
+    }
+
+    /// The last `NN%` figure in 7zz `-bsp1` output, if any.
+    private static func lastPercent(in text: String) -> Int? {
+        var found: Int?
+        var digits = ""
+        for ch in text {
+            if ch.isNumber {
+                digits.append(ch)
+            } else {
+                if ch == "%", let value = Int(digits) {
+                    found = value
+                }
+                digits = ""
+            }
+        }
+        return found
     }
 
     /// Streams a listing: each entry is handed to `onEntry` as soon as
@@ -77,12 +148,15 @@ public final class SevenZipEngine: @unchecked Sendable {
     /// in memory first (M2). Returning `false` from `onEntry` terminates
     /// the `7zz` process and throws `EngineError.cancelled` — no partial
     /// `ArchiveInfo` is ever returned. `onProgress` reports bytes read
-    /// and entries seen after each chunk.
+    /// and entries seen after each chunk. `control` (M4) cancels or
+    /// pauses the listing the same way; a control cancel also throws
+    /// `EngineError.cancelled`.
     ///
     /// If `7zz` exits non-zero after some entries were already emitted,
     /// the error is thrown and the collected entries are discarded: the
     /// caller must treat a thrown listing as incomplete.
     public func listStreaming(archive: URL, password: String? = nil,
+                              control: JobControl? = nil,
                               onProgress: ((ListingProgress) -> Void)? = nil,
                               onEntry: (ArchiveEntry) -> Bool) throws -> ArchiveInfo {
         var args = ["l", "-slt", "-sccUTF-8"]
@@ -96,6 +170,8 @@ public final class SevenZipEngine: @unchecked Sendable {
         let out = Pipe()
         process.standardOutput = out
         process.standardError = out
+        control?.attach(process)
+        defer { control?.detach() }
         try process.run()
 
         let handle = out.fileHandleForReading
@@ -115,6 +191,7 @@ public final class SevenZipEngine: @unchecked Sendable {
         let fd = handle.fileDescriptor
         var buffer = [UInt8](repeating: 0, count: 65536)
         while !cancelled {
+            if control?.isCancelled == true { cancelled = true; break }
             let count = read(fd, &buffer, buffer.count)
             if count < 0 {
                 if errno == EINTR { continue }
@@ -171,8 +248,10 @@ public final class SevenZipEngine: @unchecked Sendable {
     /// Collects the streamed listing into one `ArchiveInfo`. Callers that
     /// only need the full listing use this; callers that want entries as
     /// they arrive use `listStreaming` directly.
-    public func list(archive: URL, password: String? = nil) throws -> ArchiveInfo {
-        try listStreaming(archive: archive, password: password) { _ in true }
+    public func list(archive: URL, password: String? = nil,
+                     control: JobControl? = nil) throws -> ArchiveInfo {
+        try listStreaming(archive: archive, password: password,
+                          control: control) { _ in true }
     }
 
     /// Lists the contents of an archive stored inside another archive
@@ -303,48 +382,122 @@ public final class SevenZipEngine: @unchecked Sendable {
     }
 
     /// Test integrity of the whole archive (CRC check).
-    public func test(archive: URL, password: String? = nil) throws {
+    public func test(archive: URL, password: String? = nil,
+                     control: JobControl? = nil,
+                     onProgress: ((JobProgress) -> Void)? = nil) throws {
         var args = ["t"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
-        let (code, output) = try run(args)
+        let (code, output) = try run(args, control: control,
+                                     onProgress: onProgress.map { outer in
+            { progress in
+                outer(JobProgress(fraction: progress.fraction,
+                                  message: "Testing \(archive.lastPathComponent)"))
+            }
+        })
         guard code == 0 else {
             throw EngineError.failed(exitCode: code, message: lastLine(of: output))
         }
     }
 
     /// Extract selected entries (or all when `entries` is nil) into
-    /// `destination`, after validating every target path.
+    /// `destination`, after validating every target path. Fails fast
+    /// with `EngineError.insufficientDiskSpace` when the destination
+    /// volume cannot hold the uncompressed listing (M4 precheck).
+    /// On cancel, partially extracted entries are left in place — the
+    /// job is marked cancelled and a re-run overwrites them with `-y`;
+    /// deleting them would risk removing files the user already had.
     public func extract(archive: URL, entries: [String]? = nil,
-                        to destination: URL, password: String? = nil) throws {
-        let info = try list(archive: archive, password: password)
+                        to destination: URL, password: String? = nil,
+                        control: JobControl? = nil,
+                        onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let info = try list(archive: archive, password: password, control: control)
         let wanted = entries.map(Set.init)
         for entry in info.entries where wanted?.contains(entry.path) ?? true {
             _ = try EntryPathSafety.destinationURL(for: entry, in: destination)
         }
+        try DiskSpace.require(info.totalUncompressed, at: destination)
         var args = ["x", "-y", "-sccUTF-8", "-o\(destination.path)"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
         if let entries { args.append(contentsOf: entries) }
-        let (code, output) = try run(args)
+        let (code, output) = try run(args, control: control,
+                                     onProgress: onProgress.map { outer in
+            { progress in
+                outer(JobProgress(fraction: progress.fraction,
+                                  message: "Extracting \(archive.lastPathComponent)"))
+            }
+        })
         guard code == 0 else {
             throw EngineError.failed(exitCode: code, message: lastLine(of: output))
         }
     }
 
     /// Create a ZIP or 7z archive. Split size in MB when > 0.
+    ///
+    /// Safe creation (M4, PERF-05): 7zz writes into a staging
+    /// directory inside the destination directory first, and the
+    /// finished file(s) are renamed into place only on success — a
+    /// cancel or failure leaves no half-written final file, and the
+    /// staging directory is always removed. The rename is on the same
+    /// volume, so it is atomic; a pre-existing archive is replaced by
+    /// the rename. A free-space precheck (sources' total size, a
+    /// conservative estimate) runs before 7zz starts.
     public func create(archive: URL, sources: [URL], format: String = "zip",
                        level: Int = 9, password: String? = nil,
-                       splitMB: Int = 0) throws {
+                       splitMB: Int = 0, control: JobControl? = nil,
+                       onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let needed = try DiskSpace.totalSize(of: sources)
+        let parent = archive.deletingLastPathComponent()
+        try DiskSpace.require(needed, at: parent)
+        try FileManager.default.createDirectory(at: parent,
+                                                withIntermediateDirectories: true)
+
+        let staging = parent.appendingPathComponent(
+            ".seekzip-tmp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: staging) }
+
+        let stagedArchive = staging.appendingPathComponent(archive.lastPathComponent)
         var args = ["a", "-y", "-t\(format)", "-mx=\(level)", "-mmt=on", "-sccUTF-8"]
         if format == "7z" { args.append("-mhe=on") } // encrypt file names too
         if let password { args.append("-p\(password)") }
         if splitMB > 0 { args.append("-v\(splitMB)m") }
-        args.append(archive.path)
+        // Keep 7zz from swallowing the staging directory when a source
+        // is the destination directory itself.
+        args.append("-x!\(staging.lastPathComponent)")
+        args.append(stagedArchive.path)
         args.append(contentsOf: sources.map(\.path))
-        let (code, output) = try run(args)
+        let (code, output) = try run(args, control: control,
+                                     onProgress: onProgress.map { outer in
+            { progress in
+                outer(JobProgress(fraction: progress.fraction,
+                                  message: "Creating \(archive.lastPathComponent)"))
+            }
+        })
         guard code == 0 else {
             throw EngineError.failed(exitCode: code, message: lastLine(of: output))
+        }
+
+        // Move every file 7zz produced into place. Non-split: exactly
+        // the archive. Split: the `.001`, `.002`, … volumes. POSIX
+        // rename() overwrites an existing file atomically on the same
+        // volume; the staging directory is in the destination
+        // directory, so this never crosses volumes.
+        let produced = try FileManager.default.contentsOfDirectory(
+            at: staging, includingPropertiesForKeys: nil)
+        guard !produced.isEmpty else {
+            throw EngineError.failed(exitCode: 2,
+                                     message: "7zz produced no output for \(archive.lastPathComponent)")
+        }
+        for file in produced {
+            let target = parent.appendingPathComponent(file.lastPathComponent)
+            guard rename(file.path, target.path) == 0 else {
+                throw EngineError.failed(
+                    exitCode: 2,
+                    message: "could not move \(file.lastPathComponent) into place: \(String(cString: strerror(errno)))")
+            }
         }
     }
 
