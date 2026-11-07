@@ -36,6 +36,48 @@ public struct ListingProgress: Sendable {
 public final class SevenZipEngine: @unchecked Sendable {
     public let binaryURL: URL
 
+    /// Where stored passwords come from (M5, ENC-05). Defaults to the
+    /// shared store — Keychain on macOS, in-memory elsewhere. Tests
+    /// replace it with their own store. An explicit password passed
+    /// to an operation always wins over the store.
+    public var passwordStore: PasswordStoring = PasswordStore.shared
+
+    /// The password for `archive`: the explicit one when given, else
+    /// the stored one. 7-Zip has no stdin/env password channel, so
+    /// the resolved password still reaches 7zz as `-p…` — the window
+    /// is short and the argument vector is never logged.
+    public func resolvePassword(for archive: URL,
+                                explicit: String?) -> String? {
+        explicit ?? passwordStore.password(for: archive.path)
+    }
+
+    /// Archive format from the file extension (`zip`, `7z`, `tar`,
+    /// …), or `nil` when the extension says nothing. Used to decide
+    /// which operations an archive supports before 7zz is even run.
+    public static func format(of archive: URL) -> String? {
+        let name = archive.lastPathComponent.lowercased()
+        if name.hasSuffix(".tar.gz") || name.hasSuffix(".tgz") { return "tar" }
+        switch (archive.path as NSString).pathExtension.lowercased() {
+        case "zip": return "zip"
+        case "7z": return "7z"
+        case "tar": return "tar"
+        case "gz", "tgz": return "tar"
+        case "rar": return "rar"
+        case "iso": return "iso"
+        case "dmg": return "dmg"
+        case "wim": return "wim"
+        case "cab": return "cab"
+        default: return nil
+        }
+    }
+
+    /// Formats `7zz` can modify in place (add/delete). Rename is
+    /// narrower still (`zip`/`7z` only) — see `renameEntries`.
+    /// Everything else (RAR, ISO, DMG, …) is extraction-only: 7-Zip
+    /// cannot write those formats, and RAR creation is permanently
+    /// out of scope (proprietary, REFERENCE.md §4).
+    public static let editableFormats: Set<String> = ["zip", "7z", "tar"]
+
     /// Resolution order: explicit path, app bundle Resources, PATH.
     public init(binaryPath: String? = nil) throws {
         if let binaryPath {
@@ -68,7 +110,8 @@ public final class SevenZipEngine: @unchecked Sendable {
     /// `EngineError.cancelled` when the control cancels, even if 7zz
     /// also exited non-zero.
     private func run(_ arguments: [String], control: JobControl? = nil,
-                     onProgress: ((JobProgress) -> Void)? = nil) throws -> (Int32, String) {
+                     onProgress: ((JobProgress) -> Void)? = nil,
+                     workingDirectory: URL? = nil) throws -> (Int32, String) {
         var args = arguments
         // Switches go right after the command, before any paths: 7zz
         // parses them positionally, and a path could itself start with
@@ -77,6 +120,9 @@ public final class SevenZipEngine: @unchecked Sendable {
         let process = Process()
         process.executableURL = binaryURL
         process.arguments = args
+        if let workingDirectory {
+            process.currentDirectoryURL = workingDirectory
+        }
         // Never let 7zz prompt on stdin (e.g. "Enter password"): with no
         // terminal attached that prompt would block forever. EOF makes it
         // fail fast instead, and callers pass -p explicitly when needed.
@@ -159,6 +205,7 @@ public final class SevenZipEngine: @unchecked Sendable {
                               control: JobControl? = nil,
                               onProgress: ((ListingProgress) -> Void)? = nil,
                               onEntry: (ArchiveEntry) -> Bool) throws -> ArchiveInfo {
+        let password = resolvePassword(for: archive, explicit: password)
         var args = ["l", "-slt", "-sccUTF-8"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
@@ -329,6 +376,7 @@ public final class SevenZipEngine: @unchecked Sendable {
     public func streamEntry(archive: URL, entry: String,
                             password: String? = nil,
                             onChunk: (Data) -> Bool) throws -> Bool {
+        let password = resolvePassword(for: archive, explicit: password)
         _ = try EntryPathSafety.destinationURL(
             for: ArchiveEntry(path: entry),
             in: FileManager.default.temporaryDirectory)
@@ -385,6 +433,7 @@ public final class SevenZipEngine: @unchecked Sendable {
     public func test(archive: URL, password: String? = nil,
                      control: JobControl? = nil,
                      onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let password = resolvePassword(for: archive, explicit: password)
         var args = ["t"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
@@ -411,6 +460,7 @@ public final class SevenZipEngine: @unchecked Sendable {
                         to destination: URL, password: String? = nil,
                         control: JobControl? = nil,
                         onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let password = resolvePassword(for: archive, explicit: password)
         let info = try list(archive: archive, password: password, control: control)
         let wanted = entries.map(Set.init)
         for entry in info.entries where wanted?.contains(entry.path) ?? true {
@@ -447,6 +497,7 @@ public final class SevenZipEngine: @unchecked Sendable {
                        level: Int = 9, password: String? = nil,
                        splitMB: Int = 0, control: JobControl? = nil,
                        onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let password = resolvePassword(for: archive, explicit: password)
         let needed = try DiskSpace.totalSize(of: sources)
         let parent = archive.deletingLastPathComponent()
         try DiskSpace.require(needed, at: parent)
@@ -499,6 +550,427 @@ public final class SevenZipEngine: @unchecked Sendable {
                     message: "could not move \(file.lastPathComponent) into place: \(String(cString: strerror(errno)))")
             }
         }
+    }
+
+    // MARK: - M5: editing, conversion, verification
+
+    /// One entry's checksum as reported by the listing (CRC-32 from
+    /// `7zz l -slt`; `nil` when the format does not report one, e.g.
+    /// folders and some solid-7z entries).
+    public struct EntryChecksum: Codable, Sendable {
+        public var path: String
+        public var crc: String?
+        public var size: UInt64
+
+        public init(path: String, crc: String?, size: UInt64) {
+            self.path = path
+            self.crc = crc
+            self.size = size
+        }
+    }
+
+    /// The outcome of verifying one entry (see `verify`).
+    public struct EntryVerification: Codable, Sendable {
+        public enum Status: String, Codable {
+            /// Streamed bytes hash to the listing CRC.
+            case ok
+            /// Streamed bytes do not hash to the listing CRC (COR-02).
+            case mismatch
+            /// The listing has no CRC for this entry, so nothing to
+            /// compare against — the bytes still streamed fine.
+            case unknown
+            /// The entry could not be streamed at all (wrong password,
+            /// unreadable data, …).
+            case error
+        }
+
+        public var entryPath: String
+        public var status: Status
+        public var expectedCRC: String?
+        public var actualCRC: String?
+        public var sha256: String?
+        public var message: String?
+
+        public init(entryPath: String, status: Status,
+                    expectedCRC: String? = nil, actualCRC: String? = nil,
+                    sha256: String? = nil, message: String? = nil) {
+            self.entryPath = entryPath
+            self.status = status
+            self.expectedCRC = expectedCRC
+            self.actualCRC = actualCRC
+            self.sha256 = sha256
+            self.message = message
+        }
+    }
+
+    /// The shared edit path (M5, REFERENCE.md §3.3): every mutation
+    /// of an existing archive works on a temp copy in the same
+    /// directory and only replaces the original with a POSIX rename
+    /// after the edited copy lists cleanly. A failure or cancel
+    /// removes the temp copy and leaves the original byte-for-byte
+    /// untouched — a crash or full disk mid-edit can never destroy
+    /// the only copy. `extraBytes` is what the edit adds (0 for
+    /// remove/rename), for the free-space precheck.
+    private func editArchive(archive: URL, format: String,
+                             password: String?,
+                             control: JobControl? = nil,
+                             extraBytes: UInt64 = 0,
+                             body: (URL) throws -> Void) throws {
+        _ = format // format was validated by the caller; kept for clarity
+        let archiveSize = (try? FileManager.default.attributesOfItem(
+            atPath: archive.path))?[.size] as? UInt64 ?? 0
+        try DiskSpace.require(archiveSize + extraBytes,
+                              at: archive.deletingLastPathComponent())
+        let parent = archive.deletingLastPathComponent()
+        let temp = parent.appendingPathComponent(
+            ".\(archive.lastPathComponent).seekzip-tmp-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: archive, to: temp)
+        do {
+            try body(temp)
+            // Sanity: the edited copy must still list cleanly before
+            // it is allowed to replace the original.
+            _ = try list(archive: temp, password: password, control: control)
+            guard rename(temp.path, archive.path) == 0 else {
+                throw EngineError.failed(
+                    exitCode: 2,
+                    message: "could not replace \(archive.lastPathComponent): \(String(cString: strerror(errno)))")
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temp)
+            throw error
+        }
+    }
+
+    /// Joins an optional internal prefix with a relative entry name
+    /// (`prefix` + `/` + `name`, or just `name`).
+    private func prefixedName(_ prefix: String?, _ name: String) -> String {
+        guard let prefix, !prefix.isEmpty else { return name }
+        return prefix + "/" + name
+    }
+
+    /// Adds files/folders to an existing ZIP, 7z or TAR archive (M5).
+    /// Each source becomes an entry under `prefix` (when given):
+    /// a file keeps its basename, a folder keeps its name and its
+    /// contents' relative paths. Sources are staged in a temp dir and
+    /// added with `7zz a` from there, so the stored names are exactly
+    /// the entry names. The original is only replaced via the
+    /// temp-copy path in `editArchive`.
+    public func addEntries(archive: URL, sources: [URL],
+                           prefix: String? = nil, level: Int = 9,
+                           password: String? = nil,
+                           control: JobControl? = nil,
+                           onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let password = resolvePassword(for: archive, explicit: password)
+        guard let format = Self.format(of: archive),
+              Self.editableFormats.contains(format) else {
+            throw EngineError.failed(
+                exitCode: 2,
+                message: "cannot add entries to this archive format (\(Self.format(of: archive) ?? "unknown")) — only ZIP, 7z and TAR can be edited")
+        }
+        if let prefix {
+            _ = try EntryPathSafety.destinationURL(
+                for: ArchiveEntry(path: prefix),
+                in: FileManager.default.temporaryDirectory)
+        }
+        guard !sources.isEmpty else {
+            throw EngineError.failed(exitCode: 2, message: "nothing to add")
+        }
+
+        let fm = FileManager.default
+        let staging = fm.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try fm.createDirectory(at: staging, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: staging) }
+
+        var stagedNames: [String] = []
+        var addedBytes: UInt64 = 0
+        for source in sources {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: source.path, isDirectory: &isDir) else {
+                throw EngineError.failed(exitCode: 2,
+                                         message: "source not found: \(source.path)")
+            }
+            if !isDir.boolValue {
+                let entryName = prefixedName(prefix, source.lastPathComponent)
+                _ = try EntryPathSafety.destinationURL(
+                    for: ArchiveEntry(path: entryName),
+                    in: fm.temporaryDirectory)
+                let target = staging.appendingPathComponent(entryName)
+                try fm.createDirectory(at: target.deletingLastPathComponent(),
+                                       withIntermediateDirectories: true)
+                try fm.copyItem(at: source, to: target)
+                addedBytes += (try fm.attributesOfItem(atPath: source.path))[.size] as? UInt64 ?? 0
+                stagedNames.append(entryName)
+                continue
+            }
+            guard let enumerator = fm.enumerator(
+                at: source,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: []) else { continue }
+            for case let file as URL in enumerator {
+                let values = try file.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values.isRegularFile == true else { continue }
+                let relative = String(file.path.dropFirst(source.path.count + 1))
+                let entryName = prefixedName(
+                    prefix, source.lastPathComponent + "/" + relative)
+                _ = try EntryPathSafety.destinationURL(
+                    for: ArchiveEntry(path: entryName),
+                    in: fm.temporaryDirectory)
+                let target = staging.appendingPathComponent(entryName)
+                try fm.createDirectory(at: target.deletingLastPathComponent(),
+                                       withIntermediateDirectories: true)
+                try fm.copyItem(at: file, to: target)
+                addedBytes += UInt64(values.fileSize ?? 0)
+                stagedNames.append(entryName)
+            }
+        }
+        guard !stagedNames.isEmpty else {
+            throw EngineError.failed(exitCode: 2,
+                                     message: "nothing to add (sources are empty)")
+        }
+
+        try editArchive(archive: archive, format: format, password: password,
+                        control: control, extraBytes: addedBytes) { temp in
+            var args = ["a", "-y", "-t\(format)", "-mmt=on", "-sccUTF-8"]
+            if format == "zip" || format == "7z" { args.append("-mx=\(level)") }
+            if format == "7z", password != nil { args.append("-mhe=on") }
+            if let password { args.append("-p\(password)") }
+            args.append(temp.path)
+            args.append(contentsOf: stagedNames)
+            let (code, output) = try run(args, control: control,
+                                         onProgress: onProgress.map { outer in
+                { progress in
+                    outer(JobProgress(fraction: progress.fraction,
+                                      message: "Adding to \(archive.lastPathComponent)"))
+                }
+            }, workingDirectory: staging)
+            guard code == 0 else {
+                throw EngineError.failed(exitCode: code, message: lastLine(of: output))
+            }
+        }
+    }
+
+    /// Removes entries from an existing ZIP, 7z or TAR archive (M5).
+    /// Names must exist in the listing; anything else fails before
+    /// the archive is touched. The original is only replaced via the
+    /// temp-copy path in `editArchive`.
+    public func removeEntries(archive: URL, entries: [String],
+                              password: String? = nil,
+                              control: JobControl? = nil,
+                              onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let password = resolvePassword(for: archive, explicit: password)
+        guard let format = Self.format(of: archive),
+              Self.editableFormats.contains(format) else {
+            throw EngineError.failed(
+                exitCode: 2,
+                message: "cannot remove entries from this archive format (\(Self.format(of: archive) ?? "unknown")) — only ZIP, 7z and TAR can be edited")
+        }
+        guard !entries.isEmpty else {
+            throw EngineError.failed(exitCode: 2, message: "nothing to remove")
+        }
+        let info = try list(archive: archive, password: password, control: control)
+        for name in entries {
+            _ = try EntryPathSafety.destinationURL(
+                for: ArchiveEntry(path: name),
+                in: FileManager.default.temporaryDirectory)
+            guard info.entries.contains(where: { $0.path == name }) else {
+                throw EngineError.failed(exitCode: 2,
+                                         message: "entry not found in archive: \(name)")
+            }
+        }
+        try editArchive(archive: archive, format: format, password: password,
+                        control: control) { temp in
+            var args = ["d", "-y", "-sccUTF-8"]
+            if let password { args.append("-p\(password)") }
+            args.append(temp.path)
+            args.append(contentsOf: entries)
+            let (code, output) = try run(args, control: control,
+                                         onProgress: onProgress.map { outer in
+                { progress in
+                    outer(JobProgress(fraction: progress.fraction,
+                                      message: "Removing from \(archive.lastPathComponent)"))
+                }
+            })
+            guard code == 0 else {
+                throw EngineError.failed(exitCode: code, message: lastLine(of: output))
+            }
+        }
+    }
+
+    /// Renames entries in a ZIP or 7z archive (M5, `7zz rn`). TAR has
+    /// no rename support in 7-Zip — the error says so and suggests
+    /// remove + add instead. Old names must exist, new names must be
+    /// safe paths that do not already exist in the archive.
+    public func renameEntries(archive: URL,
+                              renames: [(old: String, new: String)],
+                              password: String? = nil,
+                              control: JobControl? = nil,
+                              onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let password = resolvePassword(for: archive, explicit: password)
+        guard let format = Self.format(of: archive),
+              format == "zip" || format == "7z" else {
+            throw EngineError.failed(
+                exitCode: 2,
+                message: "rename is only supported for ZIP and 7z archives (format: \(Self.format(of: archive) ?? "unknown")) — for TAR, remove the entry and add it back under the new name")
+        }
+        guard !renames.isEmpty else {
+            throw EngineError.failed(exitCode: 2, message: "nothing to rename")
+        }
+        let info = try list(archive: archive, password: password, control: control)
+        var pairs: [String] = []
+        for (old, new) in renames {
+            _ = try EntryPathSafety.destinationURL(
+                for: ArchiveEntry(path: new),
+                in: FileManager.default.temporaryDirectory)
+            guard info.entries.contains(where: { $0.path == old }) else {
+                throw EngineError.failed(exitCode: 2,
+                                         message: "entry not found in archive: \(old)")
+            }
+            guard !info.entries.contains(where: { $0.path == new }) else {
+                throw EngineError.failed(exitCode: 2,
+                                         message: "an entry named \(new) already exists")
+            }
+            pairs.append(contentsOf: [old, new])
+        }
+        try editArchive(archive: archive, format: format, password: password,
+                        control: control) { temp in
+            var args = ["rn", "-y", "-sccUTF-8"]
+            if let password { args.append("-p\(password)") }
+            args.append(temp.path)
+            args.append(contentsOf: pairs)
+            let (code, output) = try run(args, control: control,
+                                         onProgress: onProgress.map { outer in
+                { progress in
+                    outer(JobProgress(fraction: progress.fraction,
+                                      message: "Renaming in \(archive.lastPathComponent)"))
+                }
+            })
+            guard code == 0 else {
+                throw EngineError.failed(exitCode: code, message: lastLine(of: output))
+            }
+        }
+    }
+
+    /// Converts an archive to another format (M5): extracts everything
+    /// to a temp dir, then re-creates it with `create` (which does its
+    /// own temp staging + atomic rename + free-space precheck). Entry
+    /// names and file timestamps survive where the target format
+    /// allows; the source archive is never modified. Targets are ZIP,
+    /// 7z and TAR only — converting TO RAR is impossible for any
+    /// third-party tool (proprietary format), and converting FROM an
+    /// encrypted archive needs its password. An encrypted source stays
+    /// encrypted in the target when a password is given.
+    public func convert(archive: URL, to destination: URL,
+                        targetFormat: String? = nil,
+                        password: String? = nil,
+                        control: JobControl? = nil,
+                        onProgress: ((JobProgress) -> Void)? = nil) throws {
+        let password = resolvePassword(for: archive, explicit: password)
+        let format = (targetFormat ?? Self.format(of: destination) ?? "").lowercased()
+        guard format == "zip" || format == "7z" || format == "tar" else {
+            throw EngineError.failed(
+                exitCode: 2,
+                message: "cannot convert to '\(format)' — conversion targets are ZIP, 7z and TAR (RAR cannot be created by any third-party tool)")
+        }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir,
+                                                withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try extract(archive: archive, to: dir, password: password,
+                    control: control)
+        let extracted = try FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: nil)
+        guard !extracted.isEmpty else {
+            throw EngineError.failed(exitCode: 2,
+                                     message: "nothing to convert — the archive is empty")
+        }
+        try create(archive: destination, sources: extracted, format: format,
+                   password: password, control: control, onProgress: onProgress)
+    }
+
+    /// CRC-32 of every entry, straight from the listing (M5). Cheap —
+    /// no entry bytes are read. Folders and some solid-7z entries
+    /// have no CRC (`nil`).
+    public func entryChecksums(archive: URL, password: String? = nil,
+                               control: JobControl? = nil) throws -> [EntryChecksum] {
+        let info = try list(archive: archive, password: password, control: control)
+        return info.entries.map {
+            EntryChecksum(path: $0.path, crc: $0.crc, size: $0.size)
+        }
+    }
+
+    /// Verifies entries one by one (M5, TEST-MATRIX COR-02): each
+    /// entry is streamed through `streamEntry` and hashed (CRC-32,
+    /// plus SHA-256 when `includeSHA256` is set), then compared with
+    /// the CRC from the listing. A bad entry is reported as
+    /// `.mismatch` and the rest are still checked — verification
+    /// never stops at the first failure. 7-Zip itself reports a CRC
+    /// failure as exit code 2 after streaming the corrupt bytes, so
+    /// a stream error with bytes already hashed is also a mismatch;
+    /// an entry that could not be streamed at all is `.error`, and
+    /// an entry with no listing CRC is `.unknown`. Directories are
+    /// skipped (nothing to hash).
+    public func verify(archive: URL, entries: [String]? = nil,
+                       includeSHA256: Bool = false,
+                       password: String? = nil,
+                       control: JobControl? = nil,
+                       onProgress: ((JobProgress) -> Void)? = nil) throws -> [EntryVerification] {
+        let password = resolvePassword(for: archive, explicit: password)
+        let info = try list(archive: archive, password: password, control: control)
+        let wanted = entries.map(Set.init)
+        let targets = info.entries.filter {
+            !$0.isDirectory && (wanted?.contains($0.path) ?? true)
+        }
+        var results: [EntryVerification] = []
+        for (index, entry) in targets.enumerated() {
+            var crc = CRC32.Accumulator()
+            var sha = SHA256.Accumulator()
+            var streamedBytes: UInt64 = 0
+            var streamError: Error?
+            do {
+                _ = try streamEntry(archive: archive, entry: entry.path,
+                                    password: password) { chunk in
+                    crc.update(chunk)
+                    if includeSHA256 { sha.update(chunk) }
+                    streamedBytes += UInt64(chunk.count)
+                    return true
+                }
+            } catch {
+                streamError = error
+            }
+            let actual = crc.hex()
+            let expected = entry.crc?.uppercased()
+            let status: EntryVerification.Status
+            let message: String?
+            if let streamError {
+                if streamedBytes > 0, let expected {
+                    status = actual == expected ? .error : .mismatch
+                    message = String(describing: streamError)
+                } else {
+                    status = .error
+                    message = String(describing: streamError)
+                }
+            } else if let expected {
+                status = actual == expected ? .ok : .mismatch
+                message = status == .mismatch
+                    ? "CRC mismatch: listing says \(expected), entry hashes to \(actual)"
+                    : nil
+            } else {
+                status = .unknown
+                message = "no CRC in listing — streamed \(streamedBytes) bytes"
+            }
+            results.append(EntryVerification(
+                entryPath: entry.path, status: status,
+                expectedCRC: expected, actualCRC: actual,
+                sha256: (includeSHA256 && streamError == nil)
+                    ? sha.finalizeHex() : nil,
+                message: message))
+            onProgress?(JobProgress(
+                fraction: Double(index + 1) / Double(max(targets.count, 1)),
+                message: "Verifying \(entry.path)"))
+        }
+        return results
     }
 
     private func lastLine(of output: String) -> String {
