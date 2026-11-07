@@ -125,7 +125,8 @@ final class FinderSync: FIFinderSync {
     /// Finder asks for a badge whenever it displays an item in a
     /// watched folder.
     override func requestBadgeIdentifier(for url: URL) {
-        let badge = Self.isArchive(url) ? "archive" : nil
+        // setBadgeIdentifier takes a non-optional String; "" clears the badge.
+        let badge = Self.isArchive(url) ? "archive" : ""
         FIFinderSyncController.default().setBadgeIdentifier(badge, for: url)
     }
 
