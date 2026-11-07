@@ -49,6 +49,13 @@ không bao giờ commit.
 - NES-03 Tên entry trùng nhau; các entry chỉ khác nhau ở hoa/thường trên APFS
 - NES-04 Đường dẫn rất sâu (> 1024 ký tự) và thành phần tên file 255 ký tự
 
+## Xem trước (PRV)
+- PRV-01 Xem trước text: 200 dòng đầu / 64 KB, an toàn UTF-8, có ghi chú khi bị cắt
+- PRV-02 Entry ảnh, PDF và nhị phân: không đọc nội dung, kết luận dùng Quick Look
+- PRV-03 Entry mã hoá mà không có password: kết luận "cần password" rõ ràng
+- PRV-04 Entry trong archive lồng 2 cấp xem trước được (qua `listNested`)
+- PRV-05 Xem trước entry lớn không bao giờ giải nén toàn bộ (stream dừng ở giới hạn)
+
 ## Tên file & encoding (NAM)
 - NAM-01 Tên UTF-8 có dấu tiếng Việt và emoji
 - NAM-02 ZIP Shift-JIS (CP932) từ Windows Nhật; ZIP GBK; ZIP CP1252 —
