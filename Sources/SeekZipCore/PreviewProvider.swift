@@ -59,6 +59,13 @@ public struct EntryPreview: Codable, Sendable {
 /// stops as soon as the preview limits are reached and the `7zz`
 /// process is terminated. Images, PDFs and other binary content are
 /// never read at all — the preview only says "use Quick Look".
+///
+/// M7: the provider now takes any `ArchiveEngine` (the router), not
+/// just 7zz. When the handling engine cannot stream a single entry
+/// (XAD: `unar` only writes files), the preview falls back to
+/// extracting just that entry to a temp dir and reading the capped
+/// head of the extracted file — see `extractTextPreview`. If that
+/// fails too, the original streaming error is reported.
 public struct PreviewProvider: Sendable {
     /// Most preview bytes ever read from one entry (64 KiB).
     public static let maxPreviewBytes: Int = 64 * 1024
@@ -76,9 +83,9 @@ public struct PreviewProvider: Sendable {
         "bmp", "webp", "svg", "ico",
     ]
 
-    private let engine: SevenZipEngine
+    private let engine: any ArchiveEngine
 
-    public init(engine: SevenZipEngine) {
+    public init(engine: any ArchiveEngine) {
         self.engine = engine
     }
 
@@ -145,28 +152,21 @@ public struct PreviewProvider: Sendable {
         }
     }
 
-    /// Streams an entry's bytes and returns the first lines as text.
-    /// Stops at the preview limits (or at the first NUL byte, which
-    /// means "binary, not text") and terminates the `7zz` process, so
-    /// the rest of a huge entry is never decompressed. Lines are split
-    /// on `\n` bytes before decoding, so a multi-byte UTF-8 character
-    /// is never decoded half-way (the same trick as the M2 parser).
-    private func streamTextPreview(archive: URL, entry: ArchiveEntry,
-                                   password: String?) throws -> EntryPreview {
-        var pending = Data()
+    /// Accumulates the head of one entry's bytes into preview lines.
+    /// Shared by the streaming path (7zz `e -so`) and the extract
+    /// fallback (M7: engines that cannot stream, e.g. XAD), so both
+    /// apply exactly the same caps and sniffing rules.
+    private struct TextHead {
         var lines: [String] = []
+        var pending = Data()
         var bytesRead: UInt64 = 0
         var foundNUL = false
 
-        func appendLine(_ data: Data) {
-            var line = String(decoding: data, as: UTF8.self)
-            if line.hasSuffix("\r") { line.removeLast() } // CRLF files
-            lines.append(line)
-        }
-
-        let completed = try engine.streamEntry(
-            archive: archive, entry: entry.path, password: password
-        ) { chunk in
+        /// Feeds one chunk; returns false when the caller should stop
+        /// (limit reached or a NUL byte seen). Lines are split on `\n`
+        /// bytes before decoding, so a multi-byte UTF-8 character is
+        /// never decoded half-way (the same trick as the M2 parser).
+        mutating func feed(_ chunk: Data) -> Bool {
             // A NUL byte means binary data, not text.
             if chunk.contains(0) { foundNUL = true; return false }
             bytesRead += UInt64(chunk.count)
@@ -174,34 +174,120 @@ public struct PreviewProvider: Sendable {
             while let newline = pending.firstIndex(of: 0x0A) {
                 appendLine(Data(pending[..<newline]))
                 pending.removeSubrange(...newline)
-                if lines.count >= Self.maxPreviewLines { return false }
+                if lines.count >= PreviewProvider.maxPreviewLines { return false }
             }
             // Enough bytes: stop here; the rest is never decompressed.
             // (If the entry ends exactly at the limit, `truncated` is
             // set even though nothing was missed — harmless.)
-            if bytesRead >= UInt64(Self.maxPreviewBytes) { return false }
+            if bytesRead >= UInt64(PreviewProvider.maxPreviewBytes) { return false }
             return true
         }
 
-        if foundNUL {
-            return EntryPreview(entryPath: entry.path, kind: .binary,
-                                size: entry.size, bytesRead: bytesRead,
-                                quickLook: true,
-                                note: "Binary file — preview it with Quick Look (Space in the app).")
+        mutating func appendLine(_ data: Data) {
+            var line = String(decoding: data, as: UTF8.self)
+            if line.hasSuffix("\r") { line.removeLast() } // CRLF files
+            lines.append(line)
         }
-        // The unterminated last line, if the stream ran to the end.
-        if completed, !pending.isEmpty {
-            appendLine(pending)
-            pending.removeAll()
+
+        /// The unterminated last line, only when the source ran to
+        /// the end.
+        mutating func finish(completed: Bool) {
+            if completed, !pending.isEmpty {
+                appendLine(pending)
+                pending.removeAll()
+            }
         }
-        let truncated = !completed
-        return EntryPreview(
-            entryPath: entry.path, kind: .text, size: entry.size,
-            text: lines.joined(separator: "\n"),
-            truncated: truncated, linesShown: lines.count,
-            bytesRead: bytesRead,
-            note: truncated
-                ? "Showing the first \(lines.count) lines (max \(Self.maxPreviewBytes / 1024) KB) — extract the file to see the rest."
-                : nil)
+
+        /// The verdict for a text head. `viaExtract` notes that the
+        /// bytes came from a temporary extraction, not a stream.
+        func result(for entry: ArchiveEntry, truncated: Bool,
+                    viaExtract: Bool = false) -> EntryPreview {
+            if foundNUL {
+                return EntryPreview(entryPath: entry.path, kind: .binary,
+                                    size: entry.size, bytesRead: bytesRead,
+                                    quickLook: true,
+                                    note: "Binary file — preview it with Quick Look (Space in the app).")
+            }
+            var note: String?
+            if truncated {
+                note = "Showing the first \(lines.count) lines (max \(PreviewProvider.maxPreviewBytes / 1024) KB) — extract the file to see the rest."
+            }
+            if viaExtract {
+                let fallback = "Previewed by extracting this entry to a temporary location (this archive's engine cannot stream single entries)."
+                note = note.map { "\($0) \(fallback)" } ?? fallback
+            }
+            return EntryPreview(
+                entryPath: entry.path, kind: .text, size: entry.size,
+                text: lines.joined(separator: "\n"),
+                truncated: truncated, linesShown: lines.count,
+                bytesRead: bytesRead, note: note)
+        }
+    }
+
+    /// Streams an entry's bytes and returns the first lines as text.
+    /// Stops at the preview limits (or at the first NUL byte, which
+    /// means "binary, not text") and terminates the `7zz` process, so
+    /// the rest of a huge entry is never decompressed.
+    ///
+    /// M7: when the handling engine cannot stream the entry at all
+    /// (XAD has no `e -so` equivalent), falls back to
+    /// `extractTextPreview`. If that fails too, the original streaming
+    /// error is the one thrown — the extract error never masks it.
+    private func streamTextPreview(archive: URL, entry: ArchiveEntry,
+                                   password: String?) throws -> EntryPreview {
+        var head = TextHead()
+        do {
+            let completed = try engine.streamEntry(
+                archive: archive, entry: entry.path, password: password
+            ) { chunk in head.feed(chunk) }
+            head.finish(completed: completed)
+            return head.result(for: entry, truncated: !completed)
+        } catch let streamError {
+            do {
+                return try extractTextPreview(archive: archive, entry: entry,
+                                              password: password)
+            } catch {
+                throw streamError
+            }
+        }
+    }
+
+    /// M7 fallback for engines that cannot stream a single entry:
+    /// extracts just this entry to a temp dir and reads the capped
+    /// head of the extracted file with the same rules as the streaming
+    /// path. The entry path is resolved through `EntryPathSafety`, so
+    /// a hostile name cannot escape the temp dir, and the temp dir is
+    /// removed afterwards. The extraction itself goes through the
+    /// routed engine, so XAD-only archives preview here; a huge entry
+    /// is still only read up to the preview limits (the file on disk
+    /// is the extracted entry, not a full in-memory copy).
+    private func extractTextPreview(archive: URL, entry: ArchiveEntry,
+                                    password: String?) throws -> EntryPreview {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seekzip-preview-\(UUID().uuidString)",
+                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: tempRoot,
+                                                withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+        try engine.extract(archive: archive, entries: [entry.path],
+                           to: tempRoot, password: password,
+                           control: nil, onProgress: nil)
+        let fileURL = try EntryPathSafety.destinationURL(for: entry, in: tempRoot)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw EngineError.failed(
+                exitCode: 2,
+                message: "preview: entry '\(entry.path)' was not extracted")
+        }
+        var head = TextHead()
+        let handle = try FileHandle(forReadingFrom: fileURL)
+        defer { try? handle.close() }
+        var completed = true
+        while true {
+            guard let chunk = try handle.read(upToCount: 8192),
+                  !chunk.isEmpty else { break }
+            if !head.feed(chunk) { completed = false; break }
+        }
+        head.finish(completed: completed)
+        return head.result(for: entry, truncated: !completed, viaExtract: true)
     }
 }
