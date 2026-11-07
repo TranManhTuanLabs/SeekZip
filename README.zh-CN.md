@@ -8,7 +8,8 @@
 [架构](docs/ARCHITECTURE.zh-CN.md) ·
 [测试矩阵](docs/TEST-MATRIX.zh-CN.md) ·
 [Agent 交接](docs/HANDOFF.zh-CN.md) ·
-[参考研究](docs/REFERENCE.md)
+[参考研究](docs/REFERENCE.md) ·
+[发布指南](docs/RELEASE.md)
 （每份文档另有 Tiếng Việt 和简体中文版本，后缀分别为 `.vi.md` / `.zh-CN.md`）
 
 一款免费的 macOS 原生归档管理器，专为 Apple Silicon 打造——在解压之前先浏览和
@@ -67,6 +68,8 @@ GUI 预览接线目前仅为代码，需待 M7 的 Xcode 工程。M4 已完成�
 macOS Keychain（另一通道为 `SEEKZIP_PASSWORD` 环境变量，绝不使用 `-p`
 参数）。GUI 编辑面板与 CRC 列目前仅为代码，需待 M7 的 Xcode 工程。M6 已完成：路由协议后的 XAD 备用引擎——带能力矩阵的 `ArchiveEngine`、`EngineRouter`（优先 7zz，失败或空列表时回退到 XAD；StuffIt/Zoo/ARC 等旧格式优先 XAD；加密 7z 始终使用 7zz）、经 `lsar`/`unar` 的 XAD 列表/解压/测试（仅解压，通过暂存目录解压故失败不留残余文件，恢复的文件名编码保留在条目元数据中）、CLI `--engine auto|7zz|xad` 与 `seekzip engines`、MCP 的 `engine` 参数与 `list_engines` 工具、GUI 引擎设置（目前仅为代码，需待 M7 的 Xcode 工程）。`seekzip list/test/extract` 会报告处理该归档的引擎。
 
+M7 已完成：扩展与打包——`SeekZip.xcodeproj`（应用 + Finder Sync + Quick Look 预览扩展，共享静态库 SeekZipCore，并通过 App Group 共享引擎设置）、由 `scripts/package-engines.sh` 准备的 7zz/lsar/unar 二进制文件（7-Zip 26.05，已固定 SHA-256）放入应用包的 `Resources/Helpers/` 并以 inherit entitlement 签名、`scripts/release.sh`（归档、Developer ID 导出、公证、装订、DMG/ZIP），以及 `packaging/homebrew/` 中的 Homebrew formula 与 cask（tap `TranManhTuanLabs/homebrew-seekzip`）。M6 遗留的 XAD 预览缺口已补上：预览仅支持 XAD 的归档中的条目时，会将该条目解压到临时目录再读取受限的头部（仍遵循 64 KB / 200 行规则）。GUI 仍需在装有完整 Xcode 的 Mac 上完成首次真实构建——见 `docs/RELEASE.md`。
+
 ## 构建（在 Mac 上）
 
 ```sh
@@ -74,6 +77,16 @@ swift build          # core + CLI + MCP（GUI 需要完整 Xcode，见 Package.s
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
+
+应用（Xcode 工程——首次构建需要在装有完整 Xcode 的 Mac 上）：
+
+```sh
+open SeekZip.xcodeproj   # 设置你的 Team，然后 Product > Build（⌘B）
+./scripts/package-engines.sh   # 将 7zz/lsar/unar 准备到 build/Helpers
+./scripts/release.sh           # 归档、公证、DMG（需要 DEVELOPER_TEAM_ID）
+```
+
+完整发布检查清单见 `docs/RELEASE.md`，包括首次签名发布前必须解决的 Apple Developer 账号与磁盘空间问题。
 
 ## 队列
 
