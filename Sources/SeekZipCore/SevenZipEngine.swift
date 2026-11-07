@@ -348,12 +348,12 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
             archive: archive, entry: entry, password: password, onChunk: onChunk)
         if completed, bytes == 0, let alternate = Self.alternateNormalization(of: entry) {
             // `7zz e -so` with a name that matches nothing exits 0 with
-            // empty output — silent. macOS filenames are NFD
-            // (decomposed) on disk while the listing prints NFC
-            // (composed), or the reverse for archives made elsewhere,
-            // so a non-ASCII name can miss on the first try. Retry once
-            // with the alternate normalization; a genuinely empty entry
-            // just streams zero bytes again, which is still correct.
+            // empty output — silent. The listing can print a name in a
+            // different normalization than the one stored in the
+            // archive, so retry once with the alternate form (through
+            // the @listfile, so both forms reach 7zz byte-exact). A
+            // genuinely empty entry just streams zero bytes again,
+            // which is still correct.
             let (retryCompleted, _) = try streamEntryOnce(
                 archive: archive, entry: alternate, password: password, onChunk: onChunk)
             return retryCompleted
@@ -376,6 +376,28 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
         return nil
     }
 
+    /// Writes archive entry names to a temp file for 7zz's `@listfile`
+    /// syntax and returns its URL, or `nil` when the names cannot live
+    /// in a list file. 7zz matches entry names byte-for-byte, but
+    /// macOS normalizes `Process` argument strings to NFD (decomposed)
+    /// — proven by CI #128's diagnostic, where a direct `7zz e -so`
+    /// with an NFC name returned content for an NFD-stored entry, which
+    /// is only possible if the NFC bytes were converted to NFD before
+    /// 7zz saw them. An NFC name stored in the archive can therefore
+    /// never match through argv on macOS; through a list file the
+    /// bytes reach 7zz verbatim (the `@path` itself is ASCII). A name
+    /// containing a newline cannot live in a list file (one name per
+    /// line), so those fall back to argv.
+    private static func makeEntryListFile(names: [String]) throws -> URL? {
+        guard !names.contains(where: { $0.contains("\n") || $0.contains("\r") }) else {
+            return nil
+        }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("seekzip-list-\(UUID().uuidString).txt")
+        try names.map { $0 + "\n" }.joined().write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
     /// One `7zz e -so` run. Returns whether the handler consumed the
     /// entry to EOF and how many bytes it was given.
     private func streamEntryOnce(archive: URL, entry: String,
@@ -384,7 +406,18 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
         var args = ["e", "-so", "-y", "-sccUTF-8"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
-        args.append(entry)
+        // The entry name goes through a @listfile, not argv (see
+        // makeEntryListFile): macOS normalizes Process arguments to
+        // NFD, so an NFC name stored in the archive could never match
+        // through argv.
+        var listFile: URL?
+        if let file = try Self.makeEntryListFile(names: [entry]) {
+            listFile = file
+            args.append("@\(file.path)")
+        } else {
+            args.append(entry)
+        }
+        defer { if let listFile { try? FileManager.default.removeItem(at: listFile) } }
 
         let process = Process()
         process.executableURL = binaryURL
@@ -473,7 +506,18 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
         var args = ["x", "-y", "-sccUTF-8", "-o\(destination.path)"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
-        if let entries { args.append(contentsOf: entries) }
+        // Selected entry names go through a @listfile when possible:
+        // macOS normalizes Process arguments to NFD, so an NFC name
+        // stored in the archive could never match through argv (see
+        // makeEntryListFile).
+        var listFile: URL?
+        if let entries, let file = try Self.makeEntryListFile(names: entries) {
+            listFile = file
+            args.append("@\(file.path)")
+        } else if let entries {
+            args.append(contentsOf: entries)
+        }
+        defer { if let listFile { try? FileManager.default.removeItem(at: listFile) } }
         let (code, output) = try run(args, control: control,
                                      onProgress: onProgress.map { outer in
             { progress in
