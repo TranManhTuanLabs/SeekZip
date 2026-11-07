@@ -42,8 +42,7 @@ runner, never committed.
 - COR-03 Corrupted central directory; salvage mode extracts what's readable
 - COR-04 Not an archive at all (random bytes, empty file, directory as input)
 
-## Edit & conversion (EDT)
-- EDT-01 Add entries to ZIP and 7z (with `--into` prefix); the new
+## Edit & conversion (EDT)- EDT-01 Add entries to ZIP and 7z (with `--into` prefix); the new
   entry appears with the right CRC
 - EDT-02 Remove entries from ZIP, 7z and TAR; removing a missing entry
   fails before the archive is touched
@@ -93,3 +92,25 @@ runner, never committed.
   entry lists and CRCs must agree
 - XCHK-02 Archives created by SeekZip open in 7-Zip, WinRAR, Keka, The
   Unarchiver and macOS Archive Utility without warnings
+
+## Engine routing (ENG) — M6
+- ENG-01 ZIP/7z lists and extracts on 7zz by default; the output names
+  the handling engine (`ArchiveInfo.engine`, `seekzip engines`)
+- ENG-02 7zz failure or empty listing on a non-empty archive falls back
+  to XAD and reports the XAD engine
+- ENG-03 `--engine xad` (and the per-format override) is honoured even
+  when 7zz would succeed; `--engine 7zz` never falls back
+- ENG-04 Legacy formats (StuffIt, StuffIt X, Zoo, ARC, Compact Pro,
+  DiskDoubler, PackIt, Ace, SEA) list and extract via XAD without
+  touching 7zz
+- ENG-05 Encrypted 7z stays on 7zz: a wrong password is reported as a
+  password error (exit 5 path), XAD is never tried
+- ENG-06 XAD path traversal is blocked (exit 4) before unar runs;
+  a failed XAD extract leaves no partial output
+- ENG-07 XAD create/add/remove/rename/verify fail clearly
+  ("extraction-only"); converting FROM a legacy archive (XAD extract
+  + 7zz create) works
+- ENG-08 `seekzip engines` lists both engines, availability, formats
+  and limits; an uninstalled engine is shown, not hidden
+- ENG-09 Real-unar smoke test (needs `brew install unar` in ci.yml —
+  owner only): list/extract a real .sit fixture on the macOS runner
