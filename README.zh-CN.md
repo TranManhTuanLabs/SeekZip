@@ -60,7 +60,12 @@ M1 已通过：`swift build` + `swift test` + CLI 冒烟测试在 CI（macos-15�
 GUI 预览接线目前仅为代码，需待 M7 的 Xcode 工程。M4 已完成：持久化任务
 队列——批量解压/创建/测试，支持暂停/继续/取消、临时名 + 原子重命名创建、
 磁盘空间预检、干净的 Ctrl-C 处理——通过 `seekzip queue` 与 MCP 队列工具
-使用。GUI 队列面板目前仅为代码，需待 M7 的 Xcode 工程。
+使用。GUI 队列面板目前仅为代码，需待 M7 的 Xcode 工程。M5 已完成：创建/
+编辑完善——在 ZIP/7z/TAR 归档中添加、删除与重命名条目（临时副本 + 原子
+重命名，失败的编辑绝不会损坏原文件）、格式转换（ZIP ↔ 7z ↔ TAR；无法
+创建 RAR）、逐条目的 CRC-32/SHA-256 校验与 `verify` 命令，以及密码存入
+macOS Keychain（另一通道为 `SEEKZIP_PASSWORD` 环境变量，绝不使用 `-p`
+参数）。GUI 编辑面板与 CRC 列目前仅为代码，需待 M7 的 Xcode 工程。
 
 ## 构建（在 Mac 上）
 
@@ -85,7 +90,41 @@ seekzip queue cancel <id>                 # 终止 7zz，清理临时输出
 `~/Library/Application Support/SeekZip/queue.json`。创建归档时，7zz
 先写入暂存目录，成功后才重命名到位，因此取消或失败的创建不会留下
 写了一半的文件。解压与创建都会先检查剩余空间，目标卷空间不足时
-立即报错。密码仅保留在内存中，永不写入队列文件。
+立即报错。密码永不写入队列文件——来自 `SEEKZIP_PASSWORD` 或 Keychain
+（见下文）。
+
+## 编辑、转换、校验
+
+```sh
+seekzip add archive.zip newfile.txt --into docs   # 添加条目（ZIP/7z/TAR）
+seekzip remove archive.zip old.txt                # 删除条目
+seekzip rename archive.zip old.txt new.txt        # 重命名（仅 ZIP/7z）
+seekzip convert archive.zip archive.7z            # 转换 ZIP → 7z（也支持 7z → ZIP、TAR → 7z）
+seekzip verify archive.zip [--sha256]             # 重新校验每个条目的 CRC（及 SHA-256）
+seekzip checksums archive.zip                     # 每个条目的 CRC-32，来自列表
+```
+
+每次编辑都在同一文件夹的临时副本上进行，只有编辑后的副本能干净列出
+时才以原子重命名替换原文件——失败的编辑会让原文件逐字节保持不变。
+转换时先解压到临时目录再重新创建；条目名与内容得以保留，而转换*为*
+RAR 会明确报错（没有任何第三方工具能创建 RAR）。`verify` 会逐个流式
+读取条目并计算哈希（CRC-32，加上 `--sha256` 时还有 SHA-256），再与列表
+中的 CRC 对照；损坏的条目会被报告，其余条目仍会继续校验。
+
+## 密码
+
+```sh
+SEEKZIP_PASSWORD=hunter2 seekzip list secret.zip  # 环境变量（绝不使用 -p 参数）
+seekzip password store secret.zip                 # 存入 macOS Keychain（会提示输入两次）
+seekzip password forget secret.zip                # 忘记已保存的密码
+```
+
+密码绝不作为命令行参数传入（那样会出现在进程列表中）。CLI 从
+`SEEKZIP_PASSWORD` 或已保存的密码获取密码——在应用与 CLI 中使用 macOS
+Keychain（`com.seekzip.passwords`），Linux 测试运行时仅用内存存储。
+显式传入的密码永远优先于已保存的密码。MCP 工具使用相同的 `password`
+字段（`add_entries`、`remove_entries`、`rename_entries`、
+`convert_archive`、`verify_archive`）。
 
 RAR 归档可以解压但不能创建——RAR 的创建是专有技术
 （所有 macOS 归档工具都是如此）。
