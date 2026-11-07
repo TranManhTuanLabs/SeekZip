@@ -160,7 +160,9 @@ private struct QueueStore: Codable {
 /// from any thread (e.g. a SIGINT handler or the GUI).
 public final class JobQueue: @unchecked Sendable {
     public let storeURL: URL
-    private let engine: SevenZipEngine
+    /// Any engine (M6: the router, so queued extracts route across
+    /// engines too — a queued `.sit` extract runs on XAD).
+    private let engine: any ArchiveEngine
     private let lock = NSLock()
     private var records: [JobRecord] = []
     /// Passwords, in memory only — never persisted (see JobDescriptor).
@@ -184,7 +186,7 @@ public final class JobQueue: @unchecked Sendable {
     /// empty. Jobs that were `.running` when the app died become
     /// `.interrupted` (never silently restarted); `.paused` jobs stay
     /// paused and can be resumed.
-    public init(engine: SevenZipEngine, storeURL: URL? = nil) {
+    public init(engine: any ArchiveEngine, storeURL: URL? = nil) {
         self.engine = engine
         self.storeURL = storeURL ?? Self.defaultStoreURL()
         load()
@@ -361,7 +363,7 @@ public final class JobQueue: @unchecked Sendable {
                     archive: archiveURL,
                     sources: (descriptor.sources ?? []).map { URL(fileURLWithPath: $0) },
                     format: descriptor.format ?? "zip",
-                    password: password,
+                    level: 9, password: password, splitMB: 0,
                     control: control,
                     onProgress: { [weak self] progress in
                         self?.reportProgress(id: id, progress: progress,
