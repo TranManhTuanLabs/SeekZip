@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Bundled engine helpers (7zz, lsar, unar) run inside the app
+	     sandbox: they inherit it from the app instead of carrying
+	     their own sandbox. Applied by scripts/package-engines.sh /
+	     the Xcode "Bundle Engines" phase when the helpers are signed. -->
+	<key>com.apple.security.inherit</key>
+	<true/>
+</dict>
+</plist>
