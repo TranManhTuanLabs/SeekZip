@@ -10,25 +10,27 @@ entry paths themselves.
 SeekZipApp (SwiftUI) ─┐
 seekzip (CLI) ────────┼──► SeekZipCore ──► 7zz subprocess ──► archive files
 seekzip-mcp (MCP) ────┘        │
-                               └──► (phase 2) XADMaster fallback engine
+                               └──► XADMaster (`lsar`/`unar`) fallback (M6)
 ```
 
 ## 2. Modules
 
 | Module | Responsibility |
 |---|---|
-| `SeekZipCore/ArchiveEntry.swift` | `ArchiveEntry`, `ArchiveInfo` value models (Codable — the same shapes the CLI prints as JSON and MCP returns) |
+| `SeekZipCore/ArchiveEntry.swift` | `ArchiveEntry`, `ArchiveInfo` value models (Codable — the same shapes the CLI prints as JSON and MCP returns). `ArchiveInfo.engine` names the handling engine (M6); `ArchiveEntry.filenameEncoding` keeps XAD's recovered filename encoding (M6) |
+| `SeekZipCore/ArchiveEngine.swift` | `ArchiveEngine` protocol (M6) + `EngineRouter` (7zz first, XAD fallback, per-format overrides) + `EngineCapabilities` matrix + `EngineSummary` + `UnavailableEngine` placeholder |
+| `SeekZipCore/XADMasterEngine.swift` | XADMaster fallback engine (M6): `lsar -j` listing (JSON) + `unar` extraction into a staging dir, then move into place; extraction-only, no encrypted 7z, encoding recovery preserved |
 | `SeekZipCore/ListingParser.swift` | Parses `7zz l -slt` technical listings into models |
 | `SeekZipCore/EntryPathSafety.swift` | Zip-slip / absolute-path / symlink policy, zip-bomb heuristic |
 | `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create, nested listing, entry streaming; cancellable/pausable runs with `-bsp1` progress (M4), temp-staged atomic creation (M4); edit in place — add/remove/rename (M5), convert (M5), `entryChecksums`/`verify` (M5) |
 | `SeekZipCore/PreviewProvider.swift` | Entry previews (M3): text streams in capped at 64 KB / 200 lines, images/PDF/binary defer to Quick Look |
 | `SeekZipCore/JobControl.swift` | Pause (SIGSTOP) / resume (SIGCONT) / cancel (SIGTERM) handle for a running `7zz` process, plus `JobProgress` (M4) |
-| `SeekZipCore/JobQueue.swift` | Persistent sequential job queue (M4): `JobDescriptor`/`JobRecord`, atomic JSON store, `DiskSpace` free-space precheck |
+| `SeekZipCore/JobQueue.swift` | Persistent sequential job queue (M4): `JobDescriptor`/`JobRecord`, atomic JSON store, `DiskSpace` free-space precheck. Runs on any `ArchiveEngine` (M6: the router, so queued extracts route too) |
 | `SeekZipCore/Checksums.swift` | Pure-Swift CRC-32 (IEEE) and SHA-256 (FIPS 180-4), one-shot + streaming accumulators (M5) — no CryptoKit, so it runs on the Linux test toolchain too |
 | `SeekZipCore/PasswordStore.swift` | `PasswordStoring` protocol; Keychain on macOS (Security framework, service `com.seekzip.passwords`) and an in-memory fallback on Linux, tests only (M5) |
-| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping, `queue` subcommands, Ctrl-C via DispatchSource (M4); `add`/`remove`/`rename`/`convert`/`verify`/`checksums`/`password` subcommands, `SEEKZIP_PASSWORD` (M5) |
-| `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core; `queue_*` tools on a background runner (M4); `add_entries`/`remove_entries`/`rename_entries`/`convert_archive`/`verify_archive` (M5) |
-| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation, queue panel (M4), edit row + CRC column (M5) |
+| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping, `queue` subcommands, Ctrl-C via DispatchSource (M4); `add`/`remove`/`rename`/`convert`/`verify`/`checksums`/`password` subcommands, `SEEKZIP_PASSWORD` (M5); `--engine auto\|7zz\|xad` + `engines` command (M6) |
+| `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core; `queue_*` tools on a background runner (M4); `add_entries`/`remove_entries`/`rename_entries`/`convert_archive`/`verify_archive` (M5); `engine` argument on list/test/extract + `list_engines` (M6) |
+| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation, queue panel (M4), edit row + CRC column (M5), engine settings + "handled by" label (M6) |
 
 ## 3. Data flow — listing an archive
 
@@ -84,15 +86,28 @@ seekzip-mcp (MCP) ────┘        │
    failure leave no half-written final file (PERF-05).
 4. CLI maps a safety violation to exit code 4, engine failure to 3.
 
-## 5. Engine routing (phase 2)
+## 5. Engine routing (M6 — implemented)
 
-`SevenZipEngine` is the first implementation of an implicit
-`ArchiveEngine` contract. Phase 2 formalises the protocol and adds
-XADMaster (`unar`/`lsar`) as fallback: better filename-encoding recovery
-(Shift-JIS/GBK) and legacy formats, and a second opinion where 7zz
-fails. Selection is per-format with automatic fallback — the pattern
-documented in `docs/REFERENCE.md` §1–2. libarchive is deferred (no 7z/RAR
-decryption, no multi-volume).
+`ArchiveEngine` is the engine contract; `SevenZipEngine` and
+`XADMasterEngine` (`lsar`/`unar` subprocesses) implement it, and
+`EngineRouter` routes across them. Selection order per archive:
+explicit selection (`--engine` / MCP `engine` arg) → per-format
+override (GUI settings, persisted in UserDefaults) → capability
+order (XAD-first for extensions 7zz cannot open at all: sit, sitx,
+zoo, arc, cpt, dd, pit, ace, sea; otherwise 7zz first) → fallback
+when the primary fails, returns an empty listing for a non-empty
+archive, or is missing. Fallback never masks a password error, a
+cancel, a full disk or a safety violation, and encrypted 7z stays on
+7zz whenever a password is in play (XAD cannot open encrypted 7z).
+The handling engine is recorded in `ArchiveInfo.engine` and in the
+router's `lastEngine`, and surfaced in the CLI (`list`/`test`/
+`extract` output, `seekzip engines`) and MCP (`list_archive`
+response, `list_engines` tool). Create/edit/verify/streaming stay on
+7zz (XAD is extraction-only); `convert` extracts through the router
+and creates through 7zz, so a legacy archive can be the source.
+`listNested`/`withNestedArchive` are protocol-extension methods
+built on `list`/`extract`, so nesting routes too. libarchive is
+deferred (no 7z/RAR decryption, no multi-volume).
 
 ## 6. Frontend contracts
 
@@ -104,8 +119,11 @@ stderr.
 **MCP tools**: `list_archive`, `test_archive`, `extract_entries`,
 `create_archive`, `queue_enqueue`, `queue_list`, `queue_pause`,
 `queue_resume`, `queue_cancel`, `add_entries`, `remove_entries`,
-`rename_entries`, `convert_archive`, `verify_archive` — schemas in
-`SeekZipMCP/main.swift`.
+`rename_entries`, `convert_archive`, `verify_archive`, `list_engines`
+— schemas in `SeekZipMCP/main.swift`. `list_archive` /
+`test_archive` / `extract_entries` take an optional `engine`
+(`auto`/`7zz`/`xad`); list responses carry the handling engine in
+`ArchiveInfo.engine`, test/extract name it in their result text.
 The server speaks newline-delimited JSON-RPC 2.0 on stdio (MCP
 `2024-11-05`). Queue tools share the CLI's persistent store and run
 jobs on a background thread (M4).
@@ -115,7 +133,10 @@ jobs on a background thread (M4).
 1. **Streaming**: never load archive bytes (or full extracted files) into
    memory in Core. Listing output is read incrementally from the `7zz`
    pipe and parsed as it arrives (M2); only a 4 KB rolling tail is kept,
-   for error reporting.
+   for error reporting. Exception (M6): the XAD listing is buffered —
+   `lsar -j` emits one JSON document, so `XADMasterEngine.list`
+   collects it first; legacy archives are small and the exception is
+   documented, not a pattern to copy.
 2. **Safety before engine**: no extraction path reaches `7zz` without
    `EntryPathSafety` validation of the full entry set.
 3. **No interactive subprocesses**: stdin is always `/dev/null`; every
@@ -129,7 +150,9 @@ jobs on a background thread (M4).
    failed edit leaves the original byte-for-byte untouched.
    Extraction destinations are excepted (entries land directly; a
    cancelled extract may leave partial entries, re-running overwrites
-   them).
+   them). Exception (M6): XAD extracts stage into a temp directory
+   inside the destination and move into place only on success — a
+   failed or cancelled XAD extract leaves no partial output.
 5. **Clean-room**: behaviour and public contracts may be learned from
    reference projects; code may not be copied (MacPacker is GPL-3.0).
 
