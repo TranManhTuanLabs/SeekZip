@@ -72,7 +72,16 @@ làm hỏng bản gốc), chuyển đổi định dạng (ZIP ↔ 7z ↔ TAR; kh
 và mật khẩu lưu trong Keychain của macOS (kênh còn lại là biến môi
 trường `SEEKZIP_PASSWORD`, không bao giờ dùng tham số `-p`). Panel
 sửa của GUI và cột CRC hiện chỉ mới ở dạng code, chờ Xcode project
-ở M7.
+ở M7. M6 đã xong: engine dự phòng XAD sau routing protocol —
+`ArchiveEngine` với ma trận khả năng, `EngineRouter` (7zz trước,
+fallback sang XAD khi lỗi/listing rỗng, XAD trước với định dạng legacy
+như StuffIt/Zoo/ARC; 7z mã hoá luôn ở lại 7zz), XAD list/extract/test
+qua `lsar`/`unar` (chỉ giải nén, extract qua staging nên lỗi không để
+lại file dở, encoding tên file khôi phục được giữ trong metadata của
+entry), CLI `--engine auto|7zz|xad` + `seekzip engines`, MCP thêm tham
+số `engine` + tool `list_engines`, cài đặt engine của GUI (chỉ mới ở
+dạng code, chờ Xcode project ở M7). `seekzip list/test/extract` báo
+engine nào đã xử lý archive.
 
 ## Build (trên máy Mac)
 
