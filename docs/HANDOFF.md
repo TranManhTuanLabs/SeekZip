@@ -108,6 +108,25 @@ the next agent's context starts here.
   needs the owner to add `brew install unar` to ci.yml (Muse cannot
   edit workflows, 403). GUI engine settings + "handled by" label in
   `Sources/SeekZipApp/` as code only (uncompiled until M7).
+- **M7 done**: extensions & packaging — `SeekZip.xcodeproj` (app +
+  Finder Sync + Quick Look preview extensions; SeekZipCore linked as
+  a static-library target, same sources as SwiftPM), engine settings
+  shared through an App Group (`SeekZipAppGroup`, placeholder group id
+  `group.com.seekzip.app` — the owner must create the real group with
+  their Team ID prefix), `scripts/package-engines.sh` (7-Zip 26.05,
+  SHA-256-pinned, verified by download on the VM; lsar/unar from
+  Homebrew), `scripts/release.sh` (archive, Developer ID export,
+  notarise, staple, DMG/ZIP), Homebrew formula + cask in
+  `packaging/homebrew/` (tap `TranManhTuanLabs/homebrew-seekzip`, to
+  be created), `docs/RELEASE.md` (first-build checklist, exact ci.yml
+  lines owed). M6 leftover closed: preview of an XAD-only archive now
+  extracts just that entry to a temp dir and reads the capped head
+  (`PreviewProvider` takes any `ArchiveEngine`; CLI `preview` and the
+  GUI go through the router). 101 unit tests pass (10 new: 6 XAD
+  preview fallback, 4 bundled-engine lookup). `swift build` +
+  `swift test` green on Linux; the Xcode project itself is validated
+  by `scripts/validate-xcodeproj.py` but has NEVER been built — first
+  real build needs a Mac with full Xcode (see RELEASE.md §0).
 - Engine decisions are settled: 7zz primary, XADMaster fallback in
   phase 2, libarchive deferred — rationale in `docs/REFERENCE.md`.
 
@@ -178,6 +197,13 @@ versions disagree.
   wired in code (M5), engine settings + "handled by" label wired in
   code (M6), all uncompiled until the M7 Xcode project; no tabs or
   drag-out yet.
+- M7: the Xcode project exists and validates, but has never been
+  built — the GUI, both extensions, signing, notarisation and the
+  bundled helpers running sandboxed are all unverified until the
+  first build on a Mac with full Xcode (see `docs/RELEASE.md` §0).
+  The App Group id is a placeholder (`group.com.seekzip.app`); the
+  Homebrew tap repo does not exist yet; the formula/cask SHA-256
+  values are placeholders until the first release.
 - Passwords passed to `7zz` via `-p` are visible in the local process
   list (accepted, documented risk).
 - XAD engine notes (M6): `lsar`/`unar` come from The Unarchiver's
