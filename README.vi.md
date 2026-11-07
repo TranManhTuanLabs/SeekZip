@@ -60,7 +60,11 @@ hủy, `list --stream`). M3 đã xong: xem trước (text stream vào qua
 `7zz e -so`, giới hạn 64 KB / 200 dòng; ảnh, PDF và file nhị phân giao cho
 Quick Look) và archive lồng nhau (`list outer.zip inner.zip`,
 `preview outer.zip "inner.zip!/file.txt"`). Code xem trước của GUI hiện
-chỉ mới ở dạng code, chờ Xcode project ở M7.
+chỉ mới ở dạng code, chờ Xcode project ở M7. M4 đã xong: hàng đợi job bền
+bỉ — chạy hàng loạt extract/create/test, tạm dừng/tiếp tục/hủy, tạo
+archive qua tên tạm + đổi tên nguyên tử, kiểm tra dung lượng trống
+trước, Ctrl-C hủy sạch — qua `seekzip queue` và MCP queue tools. Panel
+queue của GUI hiện chỉ mới ở dạng code, chờ Xcode project ở M7.
 
 ## Build (trên máy Mac)
 
@@ -69,6 +73,25 @@ swift build          # core + CLI + MCP (GUI cần Xcode đầy đủ, xem Packa
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
+
+## Hàng đợi
+
+```sh
+seekzip queue add extract big.zip ~/out   # xếp hàng; chưa chạy ngay
+seekzip queue add create out.7z src --format 7z
+seekzip queue run                         # chạy các job theo thứ tự
+seekzip queue list                        # job đã lưu — còn nguyên sau khi khởi động lại app
+seekzip queue pause <id>                  # SIGSTOP; resume tiếp tục tại chỗ
+seekzip queue cancel <id>                 # dừng 7zz, dọn file tạm
+```
+
+Các job chạy lần lượt từng job một và được lưu ở
+`~/Library/Application Support/SeekZip/queue.json`. Khi tạo archive,
+7zz ghi vào thư mục tạm trước rồi mới đổi tên vào vị trí cuối khi xong,
+nên job bị hủy hay lỗi cũng không để lại file dở dang. Giải nén và tạo
+archive đều kiểm tra dung lượng trống trước và báo lỗi ngay khi ổ đích
+không đủ chỗ. Mật khẩu chỉ giữ trong bộ nhớ, không bao giờ ghi vào file
+hàng đợi.
 
 Archive RAR giải nén được nhưng không tạo được — việc tạo RAR thuộc bản
 quyền proprietary (điều này đúng với mọi ứng dụng nén trên macOS).
