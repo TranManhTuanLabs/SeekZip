@@ -12,10 +12,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install 7-Zip engine
-        run: brew install sevenzip
+        run: brew install sevenzip unar
 
       - name: Build (core, CLI, MCP, app)
         run: swift build
+
+      - name: Build Xcode project (app + extensions, unsigned)
+        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip \
+          -configuration Debug build \CODE_SIGNING_ALLOWED=NO
+
 
       - name: Unit tests
         run: swift test
@@ -33,6 +38,12 @@ jobs:
           $BIN test /tmp/fixtures/plain.zip
           $BIN test /tmp/fixtures/encrypted-headers.7z && exit 1 || true # needs password
           $BIN list /tmp/fixtures/truncated.zip && exit 1 || true        # must fail cleanly
+          $BIN list --stream /tmp/fixtures/big.zip > /dev/null
+          $BIN list /tmp/fixtures/nested.zip inner.zip
+          $BIN preview /tmp/fixtures/nested.zip "inner.zip!/src/hello.txt"
+          $BIN verify /tmp/fixtures/plain.zip
+          $BIN convert /tmp/fixtures/plain.zip /tmp/converted.7z
+          $BIN test /tmp/converted.7z
           mkdir -p /tmp/out
           $BIN extract /tmp/fixtures/plain.zip /tmp/out
           test -f "/tmp/out/src/hello.txt"
