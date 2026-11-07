@@ -13,6 +13,15 @@ import SeekZipCore
 // and the list shows each entry's CRC from the listing. Passwords come
 // from the Keychain store when the user saved them; the CLI/MCP use
 // SEEKZIP_PASSWORD or the stored password, never a `-p` argument.
+//
+// M6 engine wiring (code only, same caveat): `EngineSettings` holds
+// the default engine and per-format overrides in UserDefaults (the
+// Quick Look / Finder extensions read the same keys in M7); listings
+// go through the router (7zz first, XAD fallback), the status line
+// shows which engine handled the archive, and Convert uses the
+// router so a legacy archive (e.g. StuffIt) can be the source.
+// Preview and edits stay on 7zz (entry streaming and writing are
+// 7zz-only — XAD is extraction-only).
 
 @main
 struct SeekZipApp: App {
@@ -21,6 +30,92 @@ struct SeekZipApp: App {
             BrowserView()
         }
         .windowStyle(.titleBar)
+    }
+}
+
+/// M6: engine settings (code only — NOT compiled by SwiftPM yet).
+/// The default engine and per-format overrides live in UserDefaults,
+/// so the app and its extensions share one source of truth (the
+/// Quick Look / Finder extensions read the same keys in M7).
+final class EngineSettings: ObservableObject {
+    static let shared = EngineSettings()
+    private static let defaultKey = "seekzip.engine.default"
+    private static let overridesKey = "seekzip.engine.overrides"
+
+    /// Legacy formats the settings sheet offers an override for.
+    static let overridableFormats = [
+        "sit", "sitx", "arj", "lzh", "zoo", "arc", "cpt", "dd", "pit", "ace",
+    ]
+
+    @Published var defaultEngine: EngineSelection {
+        didSet { UserDefaults.standard.set(defaultEngine.rawValue, forKey: Self.defaultKey) }
+    }
+    @Published var formatOverrides: [String: EngineID] {
+        didSet {
+            UserDefaults.standard.set(formatOverrides.mapValues(\.rawValue),
+                                      forKey: Self.overridesKey)
+        }
+    }
+
+    init() {
+        let rawDefault = UserDefaults.standard.string(forKey: Self.defaultKey)
+            ?? EngineSelection.auto.rawValue
+        self.defaultEngine = EngineSelection(rawValue: rawDefault) ?? .auto
+        let rawOverrides = UserDefaults.standard.dictionary(forKey: Self.overridesKey)
+            as? [String: String] ?? [:]
+        self.formatOverrides = rawOverrides.compactMapValues { EngineID(rawValue: $0) }
+    }
+
+    /// A router wired with these settings (fresh each call — cheap).
+    func makeRouter() -> EngineRouter? {
+        guard let sevenZip = try? SevenZipEngine() else { return nil }
+        let router = EngineRouter(sevenZip: sevenZip, xad: XADMasterEngine())
+        router.defaultSelection = defaultEngine
+        router.overrides = formatOverrides
+        return router
+    }
+}
+
+/// M6: engine settings sheet (code only). Default-engine picker plus
+/// one override row per legacy format; "Automatic" in a row means "no
+/// override — follow the default".
+struct EngineSettingsView: View {
+    @ObservedObject var settings: EngineSettings
+
+    var body: some View {
+        Form {
+            Section("Default engine") {
+                Picker("Engine", selection: $settings.defaultEngine) {
+                    Text("Automatic (7zz first, XAD fallback)").tag(EngineSelection.auto)
+                    Text("7-Zip (7zz)").tag(EngineSelection.sevenZip)
+                    Text("XADMaster (lsar/unar)").tag(EngineSelection.xad)
+                }
+                .pickerStyle(.radioGroup)
+                Text("Automatic tries 7zz first and falls back to XAD when 7zz fails or returns nothing. Legacy formats (StuffIt, Zoo, …) go to XAD first.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Per-format override") {
+                ForEach(EngineSettings.overridableFormats, id: \.self) { format in
+                    Picker(format.uppercased(), selection: binding(for: format)) {
+                        Text("Automatic").tag(nil as EngineID?)
+                        Text("7zz").tag(EngineID.sevenZip as EngineID?)
+                        Text("xad").tag(EngineID.xad as EngineID?)
+                    }
+                }
+                Button("Reset overrides") { settings.formatOverrides = [:] }
+            }
+        }
+        .frame(minWidth: 420, minHeight: 320)
+    }
+
+    private func binding(for format: String) -> Binding<EngineID?> {
+        Binding(
+            get: { settings.formatOverrides[format] },
+            set: { newValue in
+                if let newValue { settings.formatOverrides[format] = newValue }
+                else { settings.formatOverrides.removeValue(forKey: format) }
+            })
     }
 }
 
@@ -44,6 +139,10 @@ struct BrowserView: View {
     // M5: rename target for the selected entry, and verify results.
     @State private var renameTo = ""
     @State private var verifySummary: String?
+    // M6: engine settings (default engine + per-format overrides)
+    // and the settings sheet. Listings go through the router.
+    @StateObject private var engineSettings = EngineSettings.shared
+    @State private var showEngineSettings = false
 
     private var shownEntries: [ArchiveEntry] {
         guard let info else { return [] }
@@ -59,10 +158,16 @@ struct BrowserView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 260)
                 Spacer()
+                // M6: engine settings — default engine + per-format
+                // overrides (UserDefaults, shared with extensions).
+                Button("Engines…") { showEngineSettings = true }
                 Button("Extract Selected") { extractSelected() }
                     .disabled(selection.isEmpty)
             }
             .padding(8)
+            .sheet(isPresented: $showEngineSettings) {
+                EngineSettingsView(settings: engineSettings)
+            }
 
             // M5: edit row — add/remove/rename/convert/verify. All of
             // these go through the core edit path (temp copy + atomic
@@ -153,7 +258,10 @@ struct BrowserView: View {
             }
 
             Divider()
-            Text(status).font(.footnote).foregroundStyle(.secondary)
+            // M6: the status line names the engine that handled the
+            // archive (`ArchiveInfo.engine`, stamped by the router).
+            Text(status + (info?.engine.map { " · engine: \($0)" } ?? ""))
+                .font(.footnote).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(6)
         }
@@ -202,10 +310,12 @@ struct BrowserView: View {
 
     /// M4: lazily builds the shared queue (same store file as the CLI's
     /// `seekzip queue`, so jobs enqueued here are visible there).
+    /// M6: the queue runs on the router, so queued extracts route
+    /// across engines too.
     private func makeQueue() -> JobQueue? {
         if let queue { return queue }
-        guard let engine = try? SevenZipEngine() else { return nil }
-        let created = JobQueue(engine: engine)
+        guard let router = engineSettings.makeRouter() else { return nil }
+        let created = JobQueue(engine: router)
         queue = created
         return created
     }
@@ -293,13 +403,18 @@ struct BrowserView: View {
     }
 
     /// M3: drill into a nested archive entry, in place.
+    /// M6: listings go through the router (XAD fallback applies
+    /// inside nested archives too).
     private func drillInto(_ entry: ArchiveEntry) {
         guard entry.isArchive, let archiveURL else { return }
         let next = nestedPath + [entry.path]
         Task {
             do {
-                let engine = try SevenZipEngine()
-                let loaded = try engine.listNested(archive: archiveURL,
+                guard let router = engineSettings.makeRouter() else {
+                    status = "No engine available"
+                    return
+                }
+                let loaded = try router.listNested(archive: archiveURL,
                                                    nestedPath: next)
                 nestedPath = next
                 info = loaded
@@ -318,10 +433,13 @@ struct BrowserView: View {
         let next = Array(nestedPath.dropLast())
         Task {
             do {
-                let engine = try SevenZipEngine()
+                guard let router = engineSettings.makeRouter() else {
+                    status = "No engine available"
+                    return
+                }
                 let loaded = next.isEmpty
-                    ? try engine.list(archive: archiveURL)
-                    : try engine.listNested(archive: archiveURL, nestedPath: next)
+                    ? try router.list(archive: archiveURL)
+                    : try router.listNested(archive: archiveURL, nestedPath: next)
                 nestedPath = next
                 info = loaded
                 preview = nil
@@ -344,8 +462,11 @@ struct BrowserView: View {
         showPreview = false
         Task {
             do {
-                let engine = try SevenZipEngine()
-                let loaded = try engine.list(archive: url)
+                guard let router = engineSettings.makeRouter() else {
+                    status = "No engine available"
+                    return
+                }
+                let loaded = try router.list(archive: url)
                 info = loaded
                 status = "\(loaded.entries.count) entries · " +
                          ByteCountFormatter.string(fromByteCount: Int64(loaded.totalUncompressed),
@@ -362,10 +483,13 @@ struct BrowserView: View {
         guard let archiveURL else { return }
         Task {
             do {
-                let engine = try SevenZipEngine()
+                guard let router = engineSettings.makeRouter() else {
+                    status = "No engine available"
+                    return
+                }
                 let loaded = nestedPath.isEmpty
-                    ? try engine.list(archive: archiveURL)
-                    : try engine.listNested(archive: archiveURL,
+                    ? try router.list(archive: archiveURL)
+                    : try router.listNested(archive: archiveURL,
                                             nestedPath: nestedPath)
                 info = loaded
                 status = "\(loaded.entries.count) entries"
@@ -436,6 +560,8 @@ struct BrowserView: View {
 
     /// M5: convert the archive to 7z (ZIP/7z/TAR targets are offered
     /// by the core; RAR is impossible and the core says so).
+    /// M6: conversion goes through the router, so a legacy archive
+    /// (e.g. StuffIt, via XAD) can be the source.
     private func convertArchive() {
         guard let archiveURL else { return }
         let panel = NSSavePanel()
@@ -445,8 +571,11 @@ struct BrowserView: View {
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         Task {
             do {
-                let engine = try SevenZipEngine()
-                try engine.convert(archive: archiveURL, to: dest)
+                guard let router = engineSettings.makeRouter() else {
+                    status = "No engine available"
+                    return
+                }
+                try router.convert(archive: archiveURL, to: dest)
                 status = "Converted to \(dest.lastPathComponent)"
             } catch {
                 status = "Convert failed: \(error)"
