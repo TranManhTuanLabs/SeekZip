@@ -6,13 +6,13 @@ import SeekZipCore
 // Preview, tabs, queue and Finder extensions land in later milestones;
 // all real work goes through SeekZipCore so the GUI stays thin.
 //
-// M3 preview wiring (code only — NOT compiled by SwiftPM yet: it needs
+// M5 edit wiring (code only — NOT compiled by SwiftPM yet: it needs
 // full Xcode for SwiftUIMacros, and the M7 Xcode project is where this
-// file first builds): Space toggles an inline preview panel driven by
-// `PreviewProvider` (text inline, images/PDF/binary via Quick Look),
-// and double-clicking a nested archive drills into it in place.
-// The native Quick Look panel (QLPreviewPanel) itself is wired in M7,
-// once this file can be compile-checked with Xcode.
+// file first builds): Add/Remove/Rename/Convert/Verify call the core
+// edit operations (temp-copy + atomic replace, per-entry CRC verify),
+// and the list shows each entry's CRC from the listing. Passwords come
+// from the Keychain store when the user saved them; the CLI/MCP use
+// SEEKZIP_PASSWORD or the stored password, never a `-p` argument.
 
 @main
 struct SeekZipApp: App {
@@ -41,6 +41,9 @@ struct BrowserView: View {
     // go through JobQueue, and the list survives app relaunch.
     @State private var queueJobs: [JobRecord] = []
     @State private var queue: JobQueue?
+    // M5: rename target for the selected entry, and verify results.
+    @State private var renameTo = ""
+    @State private var verifySummary: String?
 
     private var shownEntries: [ArchiveEntry] {
         guard let info else { return [] }
@@ -61,6 +64,36 @@ struct BrowserView: View {
             }
             .padding(8)
 
+            // M5: edit row — add/remove/rename/convert/verify. All of
+            // these go through the core edit path (temp copy + atomic
+            // replace), so a failed edit never corrupts the archive.
+            HStack {
+                Button("Add Files…") { addFiles() }
+                    .disabled(archiveURL == nil)
+                Button("Remove Selected") { removeSelected() }
+                    .disabled(selection.isEmpty)
+                TextField("New name", text: $renameTo)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 160)
+                Button("Rename") { renameSelected() }
+                    .disabled(selection.count != 1 || renameTo.isEmpty)
+                Button("Convert…") { convertArchive() }
+                    .disabled(archiveURL == nil)
+                Button("Verify") { verifyArchive() }
+                    .disabled(archiveURL == nil)
+                Spacer()
+            }
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
+
+            if let verifySummary {
+                Text(verifySummary)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 8)
+            }
+
             if let warning = info.flatMap(EntryPathSafety.bombWarning) {
                 Text("⚠️ \(warning)")
                     .foregroundStyle(.orange)
@@ -74,6 +107,11 @@ struct BrowserView: View {
                         : entry.isArchive ? "archivebox" : "doc")
                     Text(entry.path)
                     Spacer()
+                    // M5: CRC-32 from the listing (— when the format
+                    // does not report one); `verify` re-checks it.
+                    Text(entry.crc ?? "—")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
                     Text(ByteCountFormatter.string(fromByteCount: Int64(entry.size),
                                                    countStyle: .file))
                         .foregroundStyle(.secondary)
@@ -314,6 +352,125 @@ struct BrowserView: View {
                                                    countStyle: .file) + " uncompressed"
             } catch {
                 status = "Error: \(error)"
+            }
+        }
+    }
+
+    /// M5: reload the current archive's listing after an edit, so the
+    /// list, CRC column and counts reflect the new contents.
+    private func reloadListing() {
+        guard let archiveURL else { return }
+        Task {
+            do {
+                let engine = try SevenZipEngine()
+                let loaded = nestedPath.isEmpty
+                    ? try engine.list(archive: archiveURL)
+                    : try engine.listNested(archive: archiveURL,
+                                            nestedPath: nestedPath)
+                info = loaded
+                status = "\(loaded.entries.count) entries"
+            } catch {
+                status = "Error: \(error)"
+            }
+        }
+    }
+
+    /// M5: add files to the archive (temp-copy + atomic replace in
+    /// the core, so a failed add leaves the original untouched).
+    private func addFiles() {
+        guard let archiveURL else { return }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = true
+        panel.prompt = "Add"
+        guard panel.runModal() == .OK else { return }
+        Task {
+            do {
+                let engine = try SevenZipEngine()
+                try engine.addEntries(archive: archiveURL,
+                                      sources: panel.urls)
+                status = "Added \(panel.urls.count) file(s)"
+                reloadListing()
+            } catch {
+                status = "Add failed: \(error)"
+            }
+        }
+    }
+
+    /// M5: remove the selected entries (temp-copy + atomic replace).
+    private func removeSelected() {
+        guard let archiveURL else { return }
+        let names = Array(selection)
+        Task {
+            do {
+                let engine = try SevenZipEngine()
+                try engine.removeEntries(archive: archiveURL, entries: names)
+                selection.removeAll()
+                status = "Removed \(names.count) entr\(names.count == 1 ? "y" : "ies")"
+                reloadListing()
+            } catch {
+                status = "Remove failed: \(error)"
+            }
+        }
+    }
+
+    /// M5: rename the single selected entry to `renameTo`.
+    private func renameSelected() {
+        guard let archiveURL, let old = selection.first,
+              !renameTo.isEmpty else { return }
+        let newName = renameTo
+        Task {
+            do {
+                let engine = try SevenZipEngine()
+                try engine.renameEntries(archive: archiveURL,
+                                         renames: [(old: old, new: newName)])
+                renameTo = ""
+                selection.removeAll()
+                status = "Renamed to \(newName)"
+                reloadListing()
+            } catch {
+                status = "Rename failed: \(error)"
+            }
+        }
+    }
+
+    /// M5: convert the archive to 7z (ZIP/7z/TAR targets are offered
+    /// by the core; RAR is impossible and the core says so).
+    private func convertArchive() {
+        guard let archiveURL else { return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = archiveURL.deletingPathExtension()
+            .appendingPathExtension("7z").lastPathComponent
+        panel.prompt = "Convert"
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        Task {
+            do {
+                let engine = try SevenZipEngine()
+                try engine.convert(archive: archiveURL, to: dest)
+                status = "Converted to \(dest.lastPathComponent)"
+            } catch {
+                status = "Convert failed: \(error)"
+            }
+        }
+    }
+
+    /// M5: per-entry CRC verification (COR-02). Bad entries are
+    /// listed in the summary instead of stopping at the first one.
+    private func verifyArchive() {
+        guard let archiveURL else { return }
+        verifySummary = "Verifying…"
+        Task {
+            do {
+                let engine = try SevenZipEngine()
+                let results = try engine.verify(archive: archiveURL)
+                let bad = results.filter {
+                    $0.status == .mismatch || $0.status == .error
+                }
+                verifySummary = bad.isEmpty
+                    ? "Verified: \(results.count) entries OK"
+                    : "Verified: \(results.count - bad.count)/\(results.count) OK — bad: \(bad.map(\.entryPath).joined(separator: ", "))"
+            } catch {
+                verifySummary = "Verify failed: \(error)"
             }
         }
     }
