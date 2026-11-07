@@ -58,7 +58,11 @@ progress, cancel, `list --stream`). M3 done: preview (text streams in
 via `7zz e -so`, capped at 64 KB / 200 lines; images, PDFs and binary
 entries defer to Quick Look) and nested archives (`list outer.zip
 inner.zip`, `preview outer.zip "inner.zip!/file.txt"`). GUI preview
-wiring is code only until the M7 Xcode project.
+wiring is code only until the M7 Xcode project. M4 done: persistent job
+queue — batch extract/create/test with pause/resume/cancel, temp-name +
+atomic-rename creation, free-space precheck, and clean Ctrl-C handling —
+via `seekzip queue` and MCP queue tools. The GUI queue panel is code
+only until the M7 Xcode project.
 
 ## Build (on a Mac)
 
@@ -67,6 +71,25 @@ swift build          # core + CLI + MCP (GUI needs full Xcode, see Package.swift
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
+
+## Queue
+
+```sh
+seekzip queue add extract big.zip ~/out   # enqueue; does not run yet
+seekzip queue add create out.7z src --format 7z
+seekzip queue run                         # run queued jobs in order
+seekzip queue list                        # persisted jobs — survives relaunch
+seekzip queue pause <id>                  # SIGSTOP; resume continues in place
+seekzip queue cancel <id>                 # terminates 7zz, cleans up temp output
+```
+
+Jobs run one at a time and are stored in
+`~/Library/Application Support/SeekZip/queue.json`. Creating an archive
+writes to a staging directory first and renames into place on success,
+so a cancelled or failed create leaves no half-written file. Extracts
+and creates check free space first and fail fast when the destination
+volume cannot hold the result. Passwords are kept in memory only and
+are never written to the queue file.
 
 RAR archives can be extracted but not created — RAR creation is proprietary
 (this is true of every macOS archiver).
