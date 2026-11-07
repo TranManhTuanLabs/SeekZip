@@ -344,6 +344,43 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
         _ = try EntryPathSafety.destinationURL(
             for: ArchiveEntry(path: entry),
             in: FileManager.default.temporaryDirectory)
+        let (completed, bytes) = try streamEntryOnce(
+            archive: archive, entry: entry, password: password, onChunk: onChunk)
+        if completed, bytes == 0, let alternate = Self.alternateNormalization(of: entry) {
+            // `7zz e -so` with a name that matches nothing exits 0 with
+            // empty output — silent. macOS filenames are NFD
+            // (decomposed) on disk while the listing prints NFC
+            // (composed), or the reverse for archives made elsewhere,
+            // so a non-ASCII name can miss on the first try. Retry once
+            // with the alternate normalization; a genuinely empty entry
+            // just streams zero bytes again, which is still correct.
+            let (retryCompleted, _) = try streamEntryOnce(
+                archive: archive, entry: alternate, password: password, onChunk: onChunk)
+            return retryCompleted
+        }
+        return completed
+    }
+
+    /// The alternate Unicode normalization of a path (NFC ↔ NFD), or
+    /// `nil` when the path has no canonical decomposition/composition
+    /// to flip (pure ASCII, or a form where flipping is a no-op).
+    /// NOTE: compare UTF-8 bytes, not `String ==` — Swift string
+    /// equality is canonical-equivalence-aware, so NFC and NFD forms
+    /// of the same name compare equal even though their bytes differ
+    /// (and 7zz matches on bytes).
+    private static func alternateNormalization(of path: String) -> String? {
+        let nfd = path.decomposedStringWithCanonicalMapping
+        if !nfd.utf8.elementsEqual(path.utf8) { return nfd }
+        let nfc = path.precomposedStringWithCanonicalMapping
+        if !nfc.utf8.elementsEqual(path.utf8) { return nfc }
+        return nil
+    }
+
+    /// One `7zz e -so` run. Returns whether the handler consumed the
+    /// entry to EOF and how many bytes it was given.
+    private func streamEntryOnce(archive: URL, entry: String,
+                                 password: String?,
+                                 onChunk: (Data) -> Bool) throws -> (completed: Bool, bytes: UInt64) {
         var args = ["e", "-so", "-y", "-sccUTF-8"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
@@ -364,6 +401,7 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
         let fd = out.fileHandleForReading.fileDescriptor
         var buffer = [UInt8](repeating: 0, count: 65536)
         var completed = true
+        var bytes: UInt64 = 0
         while true {
             let count = read(fd, &buffer, buffer.count)
             if count < 0 {
@@ -371,6 +409,7 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
                 break
             }
             if count == 0 { break } // EOF
+            bytes += UInt64(count)
             if !onChunk(Data(buffer[0..<count])) { completed = false; break }
         }
         if !completed { process.terminate() }
@@ -390,7 +429,7 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
                                          message: lastLine(of: String(decoding: errData, as: UTF8.self)))
             }
         }
-        return completed
+        return (completed, bytes)
     }
 
     /// Test integrity of the whole archive (CRC check).
