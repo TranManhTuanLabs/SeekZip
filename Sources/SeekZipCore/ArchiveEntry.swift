@@ -16,11 +16,16 @@ public struct ArchiveEntry: Codable, Identifiable, Sendable {
     public var isEncrypted: Bool
     /// Raw attributes string from the engine (may contain symlink info).
     public var attributes: String?
+    /// Filename encoding the engine recovered for this entry, when it
+    /// reports one (M6: XAD's encoding recovery — e.g. "Shift_JIS").
+    /// `nil` when the name was plain UTF-8 or the engine says nothing.
+    public var filenameEncoding: String?
 
     public init(path: String, isDirectory: Bool = false, size: UInt64 = 0,
                 packedSize: UInt64 = 0, modified: Date? = nil, crc: String? = nil,
                 method: String? = nil, isEncrypted: Bool = false,
-                attributes: String? = nil) {
+                attributes: String? = nil,
+                filenameEncoding: String? = nil) {
         self.path = path
         self.isDirectory = isDirectory
         self.size = size
@@ -30,6 +35,7 @@ public struct ArchiveEntry: Codable, Identifiable, Sendable {
         self.method = method
         self.isEncrypted = isEncrypted
         self.attributes = attributes
+        self.filenameEncoding = filenameEncoding
     }
 
     public var name: String {
@@ -62,6 +68,19 @@ public struct ArchiveInfo: Codable, Sendable {
     public var format: String
     public var physicalSize: UInt64
     public var entries: [ArchiveEntry]
+    /// Which engine handled this archive (`EngineID` raw value:
+    /// "7zz" or "xad"), stamped by the router (M6). `nil` for a
+    /// listing taken straight from one engine without routing.
+    public var engine: String?
+
+    public init(path: String, format: String, physicalSize: UInt64,
+                entries: [ArchiveEntry], engine: String? = nil) {
+        self.path = path
+        self.format = format
+        self.physicalSize = physicalSize
+        self.entries = entries
+        self.engine = engine
+    }
 
     public var totalUncompressed: UInt64 { entries.reduce(0) { $0 + $1.size } }
 
