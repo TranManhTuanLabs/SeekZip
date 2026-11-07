@@ -48,6 +48,13 @@ runner, never committed.
 - NES-03 Duplicate entry names; entries differing only by case on APFS
 - NES-04 Very deep paths (> 1024 chars) and 255-char filename components
 
+## Preview (PRV)
+- PRV-01 Text preview: first 200 lines / 64 KB, UTF-8 safe, truncation noted
+- PRV-02 Image, PDF and binary entries: no content read, Quick Look verdict
+- PRV-03 Encrypted entry without a password: clean "needs password" verdict
+- PRV-04 Entry inside a 2-level nested archive previews (via `listNested`)
+- PRV-05 Preview of a huge entry never decompresses it in full (stream stops at the limit)
+
 ## Filenames & encodings (NAM)
 - NAM-01 UTF-8 names with Vietnamese diacritics and emoji
 - NAM-02 Shift-JIS (CP932) ZIP from Windows Japan; GBK ZIP; CP1252 ZIP —
