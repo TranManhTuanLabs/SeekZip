@@ -8,7 +8,8 @@ Tài liệu: [Build từ con số 0](docs/BUILD_FROM_ZERO.vi.md) ·
 [Kiến trúc](docs/ARCHITECTURE.vi.md) ·
 [Ma trận kiểm thử](docs/TEST-MATRIX.vi.md) ·
 [Bàn giao cho agent](docs/HANDOFF.vi.md) ·
-[Nghiên cứu tham khảo](docs/REFERENCE.md)
+[Nghiên cứu tham khảo](docs/REFERENCE.md) ·
+[Hướng dẫn phát hành](docs/RELEASE.md)
 (mỗi tài liệu đều có bản Tiếng Việt và 简体中文 với hậu tố `.vi.md` / `.zh-CN.md`)
 
 Ứng dụng quản lý file nén native cho macOS trên Apple Silicon, miễn phí —
@@ -83,6 +84,20 @@ số `engine` + tool `list_engines`, cài đặt engine của GUI (chỉ mới �
 dạng code, chờ Xcode project ở M7). `seekzip list/test/extract` báo
 engine nào đã xử lý archive.
 
+M7 đã xong: extensions & packaging — `SeekZip.xcodeproj` (app +
+extension Finder Sync + extension Quick Look preview, dùng chung
+SeekZipCore dạng static library và cài đặt engine qua App Group),
+các binary 7zz/lsar/unar được `scripts/package-engines.sh` chuẩn bị
+(7-Zip 26.05, SHA-256 đã ghim) vào `Resources/Helpers/` của app bundle
+và ký với entitlement inherit, `scripts/release.sh` (archive, xuất
+Developer ID, notarise, staple, DMG/ZIP), và Homebrew formula + cask
+trong `packaging/homebrew/` (tap `TranManhTuanLabs/homebrew-seekzip`).
+Khoảng trống preview XAD từ M6 đã được lấp: xem trước một entry của
+archive chỉ có XAD giờ sẽ giải nén riêng entry đó ra thư mục tạm rồi
+đọc phần đầu đã giới hạn (vẫn theo quy tắc 64 KB / 200 dòng). GUI vẫn
+cần lần build thật đầu tiên trên máy Mac có Xcode đầy đủ — xem
+`docs/RELEASE.md`.
+
 ## Build (trên máy Mac)
 
 ```sh
@@ -90,6 +105,18 @@ swift build          # core + CLI + MCP (GUI cần Xcode đầy đủ, xem Packa
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
+
+App (Xcode project — lần build đầu cần máy Mac có Xcode đầy đủ):
+
+```sh
+open SeekZip.xcodeproj   # đặt Team của bạn, rồi Product > Build (⌘B)
+./scripts/package-engines.sh   # chuẩn bị 7zz/lsar/unar vào build/Helpers
+./scripts/release.sh           # archive, notarise, DMG (cần DEVELOPER_TEAM_ID)
+```
+
+Xem `docs/RELEASE.md` để biết checklist phát hành đầy đủ, gồm các
+câu hỏi về tài khoản Apple Developer và dung lượng đĩa cần giải quyết
+trước bản release đã ký đầu tiên.
 
 ## Hàng đợi
 
