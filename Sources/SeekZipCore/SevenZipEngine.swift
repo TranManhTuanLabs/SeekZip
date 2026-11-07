@@ -13,7 +13,10 @@ public enum EngineError: Error, CustomStringConvertible {
     public var description: String {
         switch self {
         case .binaryNotFound: return "7zz engine binary not found"
-        case .failed(let code, let msg): return "7zz exited \(code): \(msg)"
+        // Neutral wording: `.failed` is also thrown for non-7zz
+        // reasons (missing sources, Keychain errors) and by the
+        // XAD engine — the message itself names the cause.
+        case .failed(let code, let msg): return "engine error (exit \(code)): \(msg)"
         case .wrongPassword: return "wrong password or corrupted archive"
         case .cancelled: return "listing cancelled"
         case .insufficientDiskSpace(let needed, let available):
@@ -33,8 +36,34 @@ public struct ListingProgress: Sendable {
 /// is read incrementally and parsed as it arrives (M2), and extraction is
 /// done by 7zz itself — but only after every entry has passed
 /// EntryPathSafety.
-public final class SevenZipEngine: @unchecked Sendable {
+public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
     public let binaryURL: URL
+
+    public var id: EngineID { .sevenZip }
+
+    /// The 7zz capability matrix (also used for the "not installed"
+    /// placeholder in `seekzip engines`).
+    public static let engineCapabilities = EngineCapabilities(
+        readFormats: [
+            "zip", "7z", "rar", "tar", "gz", "bz2", "xz", "zst",
+            "lz4", "iso", "dmg", "cab", "wim", "arj", "lzh", "msi",
+            "deb", "rpm", "xar", "cpio", "chm", "nsis",
+        ],
+        writeFormats: ["zip", "7z", "tar", "wim", "gz", "bz2", "xz"],
+        canTest: true,
+        supportsEncrypted7z: true,
+        supportsStreamingList: true,
+        supportsEntryStreaming: true,
+        notes: [
+            "Creates and edits ZIP/7z/TAR; extracts ~35 formats including RAR/RAR5.",
+            "Only engine with encrypted-7z (header) support and split volumes.",
+        ])
+
+    public var capabilities: EngineCapabilities { Self.engineCapabilities }
+
+    /// The engine only exists when its binary was found (the
+    /// initializer throws otherwise).
+    public var isAvailable: Bool { true }
 
     /// Where stored passwords come from (M5, ENC-05). Defaults to the
     /// shared store — Keychain on macOS, in-memory elsewhere. Tests
@@ -301,71 +330,6 @@ public final class SevenZipEngine: @unchecked Sendable {
                           control: control) { _ in true }
     }
 
-    /// Lists the contents of an archive stored inside another archive
-    /// (M3, TEST-MATRIX NES-01). Each element of `nestedPath` is one
-    /// level. The returned `ArchiveInfo.path` is
-    /// `outer!/inner!/deep` so callers can tell which level it is.
-    public func listNested(archive: URL, nestedPath: [String],
-                           password: String? = nil) throws -> ArchiveInfo {
-        var listed = try withNestedArchive(archive: archive,
-                                           nestedPath: nestedPath,
-                                           password: password) { nestedURL in
-            try list(archive: nestedURL, password: password)
-        }
-        listed.path = archive.path + "!/" + nestedPath.joined(separator: "!/")
-        return listed
-    }
-
-    /// Extracts a nested archive chain to a temp dir and runs `body`
-    /// with the extracted (innermost) file's URL, then removes the temp
-    /// dir (M3). Each element of `nestedPath` is one level: the entry
-    /// is validated with `EntryPathSafety` and must exist, be a file,
-    /// and be an archive. The outer archive is never modified.
-    public func withNestedArchive<T>(archive: URL, nestedPath: [String],
-                                     password: String? = nil,
-                                     body: (URL) throws -> T) throws -> T {
-        guard !nestedPath.isEmpty else {
-            throw EngineError.failed(exitCode: 2, message: "nested path is empty")
-        }
-        // Reject unsafe nested paths before any work reaches the engine.
-        for component in nestedPath {
-            _ = try EntryPathSafety.destinationURL(
-                for: ArchiveEntry(path: component),
-                in: FileManager.default.temporaryDirectory)
-        }
-        var tempDirs: [URL] = []
-        defer {
-            for dir in tempDirs {
-                try? FileManager.default.removeItem(at: dir)
-            }
-        }
-        var current = archive
-        for component in nestedPath {
-            let info = try list(archive: current, password: password)
-            guard let entry = info.entries.first(where: { $0.path == component }) else {
-                throw EngineError.failed(exitCode: 2,
-                                         message: "nested entry not found: \(component)")
-            }
-            guard !entry.isDirectory, !entry.isSymlink else {
-                throw EngineError.failed(exitCode: 2,
-                                         message: "nested entry is not a file: \(component)")
-            }
-            guard entry.isArchive else {
-                throw EngineError.failed(exitCode: 2,
-                                         message: "nested entry is not an archive: \(component)")
-            }
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString)
-            try FileManager.default.createDirectory(at: dir,
-                                                    withIntermediateDirectories: true)
-            tempDirs.append(dir)
-            try extract(archive: current, entries: [component], to: dir,
-                        password: password)
-            current = dir.appendingPathComponent(component)
-        }
-        return try body(current)
-    }
-
     /// Streams one entry's contents to `onChunk` without writing it to
     /// disk (M3 preview). Uses `7zz e -so`: bytes are read with POSIX
     /// `read()` and the process is terminated as soon as the handler
@@ -553,55 +517,9 @@ public final class SevenZipEngine: @unchecked Sendable {
     }
 
     // MARK: - M5: editing, conversion, verification
-
-    /// One entry's checksum as reported by the listing (CRC-32 from
-    /// `7zz l -slt`; `nil` when the format does not report one, e.g.
-    /// folders and some solid-7z entries).
-    public struct EntryChecksum: Codable, Sendable {
-        public var path: String
-        public var crc: String?
-        public var size: UInt64
-
-        public init(path: String, crc: String?, size: UInt64) {
-            self.path = path
-            self.crc = crc
-            self.size = size
-        }
-    }
-
-    /// The outcome of verifying one entry (see `verify`).
-    public struct EntryVerification: Codable, Sendable {
-        public enum Status: String, Codable {
-            /// Streamed bytes hash to the listing CRC.
-            case ok
-            /// Streamed bytes do not hash to the listing CRC (COR-02).
-            case mismatch
-            /// The listing has no CRC for this entry, so nothing to
-            /// compare against — the bytes still streamed fine.
-            case unknown
-            /// The entry could not be streamed at all (wrong password,
-            /// unreadable data, …).
-            case error
-        }
-
-        public var entryPath: String
-        public var status: Status
-        public var expectedCRC: String?
-        public var actualCRC: String?
-        public var sha256: String?
-        public var message: String?
-
-        public init(entryPath: String, status: Status,
-                    expectedCRC: String? = nil, actualCRC: String? = nil,
-                    sha256: String? = nil, message: String? = nil) {
-            self.entryPath = entryPath
-            self.status = status
-            self.expectedCRC = expectedCRC
-            self.actualCRC = actualCRC
-            self.sha256 = sha256
-            self.message = message
-        }
-    }
+    //
+    // `EntryChecksum` / `EntryVerification` live at top level in
+    // ArchiveEngine.swift (M6) so the protocol can use them.
 
     /// The shared edit path (M5, REFERENCE.md §3.3): every mutation
     /// of an existing archive works on a temp copy in the same
@@ -976,4 +894,10 @@ public final class SevenZipEngine: @unchecked Sendable {
     private func lastLine(of output: String) -> String {
         output.split(separator: "\n").last.map(String.init) ?? ""
     }
+}
+
+// MARK: - BinaryReporting (for `seekzip engines`)
+
+extension SevenZipEngine: BinaryReporting {
+    var binaryPath: String? { binaryURL.path }
 }
