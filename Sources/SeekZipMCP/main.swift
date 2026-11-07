@@ -11,6 +11,11 @@ import SeekZipCore
 //   queue_enqueue   { kind, archive, destination?, entries?, sources?, format?, password? }
 //   queue_list      {}
 //   queue_pause / queue_resume / queue_cancel { id }
+//   add_entries     { path, sources, prefix?, password? }
+//   remove_entries  { path, entries, password? }
+//   rename_entries  { path, from, to, password? }  (from/to are parallel arrays)
+//   convert_archive { path, destination, format?, password? }
+//   verify_archive  { path, entries?, sha256?, password? }
 // Queue jobs are persisted (M4, PERF-06) and run on a background
 // thread; enqueue returns immediately with the job id.
 
@@ -107,6 +112,45 @@ let toolDefs: [[String: Any]] = [
      "inputSchema": ["type": "object",
                      "properties": ["id": ["type": "string"]],
                      "required": ["id"]]],
+    ["name": "add_entries",
+     "description": "Add files to a ZIP, 7z or TAR archive (temp-copy + atomic replace, so a failed edit never corrupts the original). Sources are stored under prefix when given.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string"],
+                                    "sources": ["type": "array", "items": ["type": "string"]],
+                                    "prefix": ["type": "string"],
+                                    "password": ["type": "string"]],
+                     "required": ["path", "sources"]]],
+    ["name": "remove_entries",
+     "description": "Remove entries from a ZIP, 7z or TAR archive (temp-copy + atomic replace).",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string"],
+                                    "entries": ["type": "array", "items": ["type": "string"]],
+                                    "password": ["type": "string"]],
+                     "required": ["path", "entries"]]],
+    ["name": "rename_entries",
+     "description": "Rename entries in a ZIP or 7z archive. from and to are parallel arrays of the same length.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string"],
+                                    "from": ["type": "array", "items": ["type": "string"]],
+                                    "to": ["type": "array", "items": ["type": "string"]],
+                                    "password": ["type": "string"]],
+                     "required": ["path", "from", "to"]]],
+    ["name": "convert_archive",
+     "description": "Convert an archive to ZIP, 7z or TAR (extract to temp, re-create). RAR cannot be created.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string"],
+                                    "destination": ["type": "string"],
+                                    "format": ["type": "string"],
+                                    "password": ["type": "string"]],
+                     "required": ["path", "destination"]]],
+    ["name": "verify_archive",
+     "description": "Verify entries one by one: stream each entry, hash it (CRC-32, plus SHA-256 when sha256 is true) and compare with the listing CRC. Bad entries are reported, not fatal to the rest.",
+     "inputSchema": ["type": "object",
+                     "properties": ["path": ["type": "string"],
+                                    "entries": ["type": "array", "items": ["type": "string"]],
+                                    "sha256": ["type": "string"],
+                                    "password": ["type": "string"]],
+                     "required": ["path"]]],
 ]
 
 let engine = try? SevenZipEngine()
@@ -213,6 +257,45 @@ while let line = readLine() {
                 }
                 toolResult(id: request.id,
                            encodeJSON(queue.record(for: record.id)!))
+            case "add_entries":
+                try engine.addEntries(
+                    archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
+                    sources: (a["sources"]?.array ?? []).map { URL(fileURLWithPath: $0) },
+                    prefix: a["prefix"]?.string,
+                    password: a["password"]?.string)
+                toolResult(id: request.id, "Added")
+            case "remove_entries":
+                try engine.removeEntries(
+                    archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
+                    entries: a["entries"]?.array ?? [],
+                    password: a["password"]?.string)
+                toolResult(id: request.id, "Removed")
+            case "rename_entries":
+                let from = a["from"]?.array ?? []
+                let to = a["to"]?.array ?? []
+                guard from.count == to.count else {
+                    toolResult(id: request.id, "from and to must have the same length", isError: true)
+                    continue
+                }
+                try engine.renameEntries(
+                    archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
+                    renames: zip(from, to).map { (old: $0, new: $1) },
+                    password: a["password"]?.string)
+                toolResult(id: request.id, "Renamed")
+            case "convert_archive":
+                try engine.convert(
+                    archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
+                    to: URL(fileURLWithPath: a["destination"]?.string ?? ""),
+                    targetFormat: a["format"]?.string,
+                    password: a["password"]?.string)
+                toolResult(id: request.id, "Converted")
+            case "verify_archive":
+                let results = try engine.verify(
+                    archive: URL(fileURLWithPath: a["path"]?.string ?? ""),
+                    entries: a["entries"]?.array,
+                    includeSHA256: a["sha256"]?.string == "true",
+                    password: a["password"]?.string)
+                toolResult(id: request.id, encodeJSON(results))
             default:
                 toolResult(id: request.id, "unknown tool: \(name)", isError: true)
             }
