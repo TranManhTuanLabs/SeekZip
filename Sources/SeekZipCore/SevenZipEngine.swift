@@ -107,14 +107,14 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
     /// out of scope (proprietary, REFERENCE.md §4).
     public static let editableFormats: Set<String> = ["zip", "7z", "tar"]
 
-    /// Resolution order: explicit path, app bundle Resources, PATH.
+    /// Resolution order: explicit path, app bundle Resources/Helpers
+    /// (M7: the packaged app stages its engines there), PATH.
     public init(binaryPath: String? = nil) throws {
         if let binaryPath {
             binaryURL = URL(fileURLWithPath: binaryPath)
             return
         }
-        if let bundled = Bundle.main.url(forResource: "7zz", withExtension: nil),
-           FileManager.default.isExecutableFile(atPath: bundled.path) {
+        if let bundled = BundledEngines.sevenZipURL() {
             binaryURL = bundled
             return
         }
