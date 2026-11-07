@@ -1481,3 +1481,550 @@ final class EditTests: XCTestCase {
         XCTAssertFalse(listCalls.last?.contains("-pstored-pw") ?? true)
     }
 }
+
+// MARK: - M6: XAD fallback engine
+
+final class XADEngineTests: XCTestCase {
+
+    private struct FakeXAD {
+        let dir: URL
+        let lsar: URL
+        let unar: URL
+    }
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir,
+                                                withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// A fake `lsar` that prints the canned `lsar -j` document from
+    /// `lsar.json` next to it (and logs argv), and a fake `unar` that
+    /// creates the files listed in `unar-manifest.txt` (`path|content`
+    /// per line) under its `-o` directory. Touching `lsar-fail` /
+    /// `unar-fail` in the dir makes that tool fail (`unar-fail` writes
+    /// one partial file first, so cleanup can be proven).
+    private func makeFakeXAD(listing: String, manifest: String,
+                             failLsar: Bool = false,
+                             failUnar: Bool = false) throws -> FakeXAD {
+        let dir = try tempDir()
+        let lsar = dir.appendingPathComponent("lsar")
+        let unar = dir.appendingPathComponent("unar")
+        let lsarScript = """
+        #!/bin/sh
+        dir="$(dirname "$0")"
+        echo "$@" >> "$dir/lsar-argv.log"
+        if [ -f "$dir/lsar-fail" ]; then echo "lsar: cannot open archive" >&2; exit 2; fi
+        cat "$dir/lsar.json"
+        """
+        let unarScript = """
+        #!/bin/sh
+        dir="$(dirname "$0")"
+        echo "$@" >> "$dir/unar-argv.log"
+        out=""
+        for a in "$@"; do case "$a" in -o*) out="${a#-o}";; esac; done
+        if [ -f "$dir/unar-fail" ]; then
+          mkdir -p "$out"
+          printf 'partial' > "$out/partial.txt"
+          echo "unar: extraction failed" >&2
+          exit 1
+        fi
+        while IFS='|' read -r path content; do
+          [ -z "$path" ] && continue
+          mkdir -p "$out/$(dirname "$path")"
+          printf '%s' "$content" > "$out/$path"
+        done < "$dir/unar-manifest.txt"
+        """
+        try lsarScript.write(to: lsar, atomically: true, encoding: .utf8)
+        try unarScript.write(to: unar, atomically: true, encoding: .utf8)
+        for script in [lsar, unar] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                  ofItemAtPath: script.path)
+        }
+        try listing.write(to: dir.appendingPathComponent("lsar.json"),
+                          atomically: true, encoding: .utf8)
+        try manifest.write(to: dir.appendingPathComponent("unar-manifest.txt"),
+                           atomically: true, encoding: .utf8)
+        if failLsar {
+            try "".write(to: dir.appendingPathComponent("lsar-fail"),
+                         atomically: true, encoding: .utf8)
+        }
+        if failUnar {
+            try "".write(to: dir.appendingPathComponent("unar-fail"),
+                         atomically: true, encoding: .utf8)
+        }
+        return FakeXAD(dir: dir, lsar: lsar, unar: unar)
+    }
+
+    private func lsarEntry(_ path: String, size: Int = 5,
+                           dir: Bool = false, encrypted: Bool = false,
+                           method: String? = nil,
+                           encoding: String? = nil) -> [String: Any] {
+        var e: [String: Any] = [
+            "XADFileName": path,
+            "XADFileSize": size,
+            "XADCompressedSize": size,
+            "XADIsDirectory": dir,
+            "XADIsEncrypted": encrypted,
+        ]
+        if let method { e["XADCompressionName"] = method }
+        if let encoding { e["XADFileNameEncoding"] = encoding }
+        return e
+    }
+
+    private func lsarJSON(format: String = "StuffIt",
+                          entries: [[String: Any]]) throws -> String {
+        let doc: [String: Any] = ["lsarFormatName": format,
+                                  "lsarContents": entries]
+        let data = try JSONSerialization.data(withJSONObject: doc)
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    private func engine(for fake: FakeXAD) -> XADMasterEngine {
+        XADMasterEngine(lsarPath: fake.lsar.path, unarPath: fake.unar.path)
+    }
+
+    private func dummyArchive(in dir: URL, name: String = "old.sit") throws -> URL {
+        let url = dir.appendingPathComponent(name)
+        try "dummy archive bytes".write(to: url, atomically: true, encoding: .utf8)
+        return url
+    }
+
+    func testXadListsFromLsarJSON() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [
+                lsarEntry("hello.txt", size: 11, method: "StuffIt"),
+                lsarEntry("docs", dir: true),
+                lsarEntry("secret.txt", size: 6, encrypted: true),
+            ]),
+            manifest: "")
+        let archive = try dummyArchive(in: dir)
+        let info = try engine(for: fake).list(archive: archive)
+        XCTAssertEqual(info.format, "stuffit")
+        XCTAssertEqual(info.entries.map(\.path),
+                       ["hello.txt", "docs", "secret.txt"])
+        XCTAssertEqual(info.entries[0].size, 11)
+        XCTAssertEqual(info.entries[0].method, "StuffIt")
+        XCTAssertTrue(info.entries[1].isDirectory)
+        XCTAssertTrue(info.entries[2].isEncrypted)
+    }
+
+    func testXadPreservesFilenameEncoding() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [
+                lsarEntry("notes.txt", encoding: "Shift_JIS"),
+                lsarEntry("plain.txt"),
+            ]),
+            manifest: "")
+        let info = try engine(for: fake).list(archive: try dummyArchive(in: dir))
+        XCTAssertEqual(info.entries[0].filenameEncoding, "Shift_JIS")
+        XCTAssertNil(info.entries[1].filenameEncoding)
+    }
+
+    func testXadListFailsClearlyWhenLsarFails() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: []), manifest: "", failLsar: true)
+        XCTAssertThrowsError(
+            try engine(for: fake).list(archive: try dummyArchive(in: dir))
+        ) { error in
+            guard case EngineError.failed(_, let message) = error else {
+                return XCTFail("expected EngineError.failed, got \(error)")
+            }
+            XCTAssertTrue(message.contains("lsar"), "message: \(message)")
+        }
+    }
+
+    func testXadExtractsToDestination() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [
+                lsarEntry("hello.txt", size: 5),
+                lsarEntry("sub/b.txt", size: 3),
+            ]),
+            manifest: "hello.txt|hello\nsub/b.txt|bye\n")
+        let dest = dir.appendingPathComponent("out")
+        try engine(for: fake).extract(archive: try dummyArchive(in: dir),
+                                      to: dest)
+        XCTAssertEqual(try String(contentsOf: dest.appendingPathComponent("hello.txt"),
+                                  encoding: .utf8), "hello")
+        XCTAssertEqual(try String(contentsOf: dest.appendingPathComponent("sub/b.txt"),
+                                  encoding: .utf8), "bye")
+    }
+
+    func testXadExtractMovesOnlyWantedEntries() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [
+                lsarEntry("a.txt", size: 1),
+                lsarEntry("b.txt", size: 1),
+            ]),
+            manifest: "a.txt|A\nb.txt|B\n")
+        let dest = dir.appendingPathComponent("out")
+        try engine(for: fake).extract(archive: try dummyArchive(in: dir),
+                                      entries: ["a.txt"], to: dest)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: dest.appendingPathComponent("a.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dest.appendingPathComponent("b.txt").path))
+    }
+
+    func testXadExtractBlocksTraversal() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [lsarEntry("../evil.txt")]),
+            manifest: "../evil.txt|evil\n")
+        let dest = dir.appendingPathComponent("out")
+        XCTAssertThrowsError(
+            try engine(for: fake).extract(archive: try dummyArchive(in: dir),
+                                          to: dest)
+        ) { error in
+            XCTAssertTrue(error is EntryPathSafety.Violation,
+                          "expected a safety violation, got \(error)")
+        }
+        // unar never ran, and nothing was written.
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: fake.dir.appendingPathComponent("unar-argv.log").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    func testXadFailedExtractLeavesNoPartialOutput() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [lsarEntry("hello.txt", size: 5)]),
+            manifest: "hello.txt|hello\n", failUnar: true)
+        let dest = dir.appendingPathComponent("out")
+        XCTAssertThrowsError(
+            try engine(for: fake).extract(archive: try dummyArchive(in: dir),
+                                          to: dest))
+        // The partial file unar wrote into staging is gone with it.
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dest.appendingPathComponent("partial.txt").path))
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: dest.appendingPathComponent("hello.txt").path))
+        let leftovers = (try? FileManager.default.contentsOfDirectory(
+            at: dest, includingPropertiesForKeys: nil)) ?? []
+        XCTAssertTrue(leftovers.isEmpty, "staging left behind: \(leftovers)")
+    }
+
+    func testXadTestSucceedsAndFailsWithUnar() throws {
+        let dir = try tempDir()
+        let good = try makeFakeXAD(
+            listing: try lsarJSON(entries: [lsarEntry("hello.txt", size: 5)]),
+            manifest: "hello.txt|hello\n")
+        try engine(for: good).test(archive: try dummyArchive(in: dir))
+        let bad = try makeFakeXAD(
+            listing: try lsarJSON(entries: [lsarEntry("hello.txt", size: 5)]),
+            manifest: "hello.txt|hello\n", failUnar: true)
+        XCTAssertThrowsError(
+            try engine(for: bad).test(archive: try dummyArchive(in: dir)))
+    }
+
+    func testXadCreateAndEditFailClearly() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [lsarEntry("hello.txt", size: 5)]),
+            manifest: "hello.txt|hello\n")
+        let xad = engine(for: fake)
+        let archive = try dummyArchive(in: dir)
+        let dest = dir.appendingPathComponent("new.zip")
+        let src = dir.appendingPathComponent("src.txt")
+        try "src".write(to: src, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try xad.create(archive: dest, sources: [src], format: "zip", level: 9, password: nil, splitMB: 0, control: nil, onProgress: nil)) { error in
+            XCTAssertTrue(String(describing: error).contains("extraction-only"), "\(error)")
+        }
+        XCTAssertThrowsError(try xad.addEntries(archive: archive, sources: [src], prefix: nil, level: 9, password: nil, control: nil, onProgress: nil)) { error in
+            XCTAssertTrue(String(describing: error).contains("extraction-only"), "\(error)")
+        }
+        XCTAssertThrowsError(try xad.removeEntries(archive: archive, entries: ["hello.txt"], password: nil, control: nil, onProgress: nil)) { error in
+            XCTAssertTrue(String(describing: error).contains("extraction-only"), "\(error)")
+        }
+        XCTAssertThrowsError(try xad.renameEntries(archive: archive, renames: [(old: "hello.txt", new: "bye.txt")], password: nil, control: nil, onProgress: nil)) { error in
+            XCTAssertTrue(String(describing: error).contains("extraction-only"), "\(error)")
+        }
+        XCTAssertThrowsError(try xad.verify(archive: archive, entries: nil, includeSHA256: false, password: nil, control: nil, onProgress: nil)) { error in
+            XCTAssertTrue(String(describing: error).contains("cannot verify"), "\(error)")
+        }
+    }
+
+    func testXadStreamEntryUnsupported() throws {
+        let dir = try tempDir()
+        let fake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [lsarEntry("hello.txt", size: 5)]),
+            manifest: "hello.txt|hello\n")
+        XCTAssertThrowsError(
+            try engine(for: fake).streamEntry(archive: try dummyArchive(in: dir),
+                                              entry: "hello.txt", password: nil) { _ in true }
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("cannot stream"), "\(error)")
+        }
+    }
+
+    func testXadMissingBinariesReportsUnavailable() throws {
+        let xad = XADMasterEngine(lsarPath: "/nonexistent/lsar",
+                                  unarPath: "/nonexistent/unar")
+        XCTAssertFalse(xad.isAvailable)
+        let dir = try tempDir()
+        XCTAssertThrowsError(
+            try xad.list(archive: try dummyArchive(in: dir))
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("not installed"), "\(error)")
+        }
+    }
+}
+
+// MARK: - M6: engine router
+
+final class EngineRouterTests: XCTestCase {
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir,
+                                                withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Fake 7zz with a mode file next to it: "ok" (2-entry listing),
+    /// "empty" (0-entry listing, exit 0), "fail" (exit 2), "wrongPassword"
+    /// (exit 2, password text), and "a" creates the archive file it is
+    /// asked to write (for the convert test).
+    private func makeFake7zz(mode: String) throws -> URL {
+        let dir = try tempDir()
+        let script = dir.appendingPathComponent("fake7zz")
+        let text = """
+        #!/bin/sh
+        dir="$(dirname "$0")"
+        echo "$@" >> "$dir/fake7zz-argv.log"
+        mode="$(cat "$dir/mode")"
+        cmd="$1"
+        if [ "$cmd" = "a" ]; then
+          shift
+          for a in "$@"; do case "$a" in -*) ;; *) touch "$a"; break;; esac; done
+          exit 0
+        fi
+        case "$mode" in
+          fail) echo "ERROR: Can not open the file as archive" >&2; exit 2;;
+          wrongPassword) echo "ERROR: Wrong password" >&2; exit 2;;
+          empty) printf '7-Zip (z) 24.09\\n\\nListing archive: x\\n\\n--\\nPath = x\\nType = zip\\nPhysical Size = 100\\n\\n----------\\n';;
+          *) printf '7-Zip (z) 24.09\\n\\nListing archive: x\\n\\n--\\nPath = x\\nType = zip\\nPhysical Size = 100\\n\\n----------\\nPath = seven.txt\\nFolder = -\\nSize = 7\\n\\nPath = other.txt\\nFolder = -\\nSize = 5\\n\\n';;
+        esac
+        """
+        try text.write(to: script, atomically: true, encoding: .utf8)
+        try mode.write(to: dir.appendingPathComponent("mode"),
+                       atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        return script
+    }
+
+    /// Fake lsar/unar pair (same shape as XADEngineTests): lsar prints
+    /// the canned JSON, unar creates the manifest files.
+    private func makeFakeXAD(listing: String, manifest: String) throws -> (lsar: URL, unar: URL, dir: URL) {
+        let dir = try tempDir()
+        let lsar = dir.appendingPathComponent("lsar")
+        let unar = dir.appendingPathComponent("unar")
+        let lsarScript = """
+        #!/bin/sh
+        dir="$(dirname "$0")"
+        echo "$@" >> "$dir/lsar-argv.log"
+        cat "$dir/lsar.json"
+        """
+        let unarScript = """
+        #!/bin/sh
+        dir="$(dirname "$0")"
+        echo "$@" >> "$dir/unar-argv.log"
+        out=""
+        for a in "$@"; do case "$a" in -o*) out="${a#-o}";; esac; done
+        while IFS='|' read -r path content; do
+          [ -z "$path" ] && continue
+          mkdir -p "$out/$(dirname "$path")"
+          printf '%s' "$content" > "$out/$path"
+        done < "$dir/unar-manifest.txt"
+        """
+        try lsarScript.write(to: lsar, atomically: true, encoding: .utf8)
+        try unarScript.write(to: unar, atomically: true, encoding: .utf8)
+        for script in [lsar, unar] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                  ofItemAtPath: script.path)
+        }
+        try listing.write(to: dir.appendingPathComponent("lsar.json"),
+                          atomically: true, encoding: .utf8)
+        try manifest.write(to: dir.appendingPathComponent("unar-manifest.txt"),
+                           atomically: true, encoding: .utf8)
+        return (lsar, unar, dir)
+    }
+
+    private func lsarJSON(entries: [[String: Any]]) throws -> String {
+        let doc: [String: Any] = ["lsarFormatName": "StuffIt",
+                                  "lsarContents": entries]
+        return String(decoding: try JSONSerialization.data(withJSONObject: doc),
+                      as: UTF8.self)
+    }
+
+    private func router(sevenMode: String,
+                        xadEntries: [[String: Any]] = [
+                            ["XADFileName": "legacy.txt", "XADFileSize": 6,
+                             "XADCompressedSize": 6, "XADIsDirectory": false,
+                             "XADIsEncrypted": false],
+                        ],
+                        manifest: String = "legacy.txt|legacy\n") throws -> (EngineRouter, URL, URL) {
+        let seven = try SevenZipEngine(binaryPath: try makeFake7zz(mode: sevenMode).path)
+        let xadFake = try makeFakeXAD(listing: try lsarJSON(entries: xadEntries),
+                                      manifest: manifest)
+        let xad = XADMasterEngine(lsarPath: xadFake.lsar.path,
+                                  unarPath: xadFake.unar.path)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try "dummy archive bytes".write(to: archive, atomically: true, encoding: .utf8)
+        return (EngineRouter(engines: [seven, xad]), archive, xadFake.dir)
+    }
+
+    private func invoked(_ dir: URL, _ log: String) -> Bool {
+        FileManager.default.fileExists(atPath: dir.appendingPathComponent(log).path)
+    }
+
+    func testRouterPrefers7zzForZip() throws {
+        let (router, archive, xadDir) = try router(sevenMode: "ok")
+        let info = try router.list(archive: archive)
+        XCTAssertEqual(info.engine, "7zz")
+        XCTAssertEqual(info.entries.map(\.path), ["seven.txt", "other.txt"])
+        XCTAssertFalse(invoked(xadDir, "lsar-argv.log"), "lsar must not run when 7zz succeeds")
+    }
+
+    func testRouterFallsBackToXadWhen7zzFails() throws {
+        let (router, archive, _) = try router(sevenMode: "fail")
+        let info = try router.list(archive: archive)
+        XCTAssertEqual(info.engine, "xad")
+        XCTAssertEqual(info.entries.map(\.path), ["legacy.txt"])
+    }
+
+    func testRouterFallsBackOnEmpty7zzListing() throws {
+        let (router, archive, _) = try router(sevenMode: "empty")
+        let info = try router.list(archive: archive)
+        XCTAssertEqual(info.engine, "xad")
+        XCTAssertEqual(info.entries.map(\.path), ["legacy.txt"])
+    }
+
+    func testRouterHonoursXadOverride() throws {
+        let (router, archive, _) = try router(sevenMode: "ok")
+        router.defaultSelection = .xad
+        let info = try router.list(archive: archive)
+        XCTAssertEqual(info.engine, "xad")
+        XCTAssertEqual(info.entries.map(\.path), ["legacy.txt"])
+    }
+
+    func testRouterUsesXadFirstForStuffIt() throws {
+        let seven = try SevenZipEngine(binaryPath: try makeFake7zz(mode: "ok").path)
+        let xadFake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [
+                ["XADFileName": "legacy.txt", "XADFileSize": 6,
+                 "XADCompressedSize": 6, "XADIsDirectory": false,
+                 "XADIsEncrypted": false],
+            ]),
+            manifest: "legacy.txt|legacy\n")
+        let xad = XADMasterEngine(lsarPath: xadFake.lsar.path,
+                                  unarPath: xadFake.unar.path)
+        let router = EngineRouter(engines: [seven, xad])
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("old.sit")
+        try "dummy archive bytes".write(to: archive, atomically: true, encoding: .utf8)
+        let info = try router.list(archive: archive)
+        XCTAssertEqual(info.engine, "xad")
+        // 7zz would have succeeded if asked — prove it was never tried.
+        let sevenDir = URL(fileURLWithPath: seven.binaryURL.path)
+            .deletingLastPathComponent()
+        XCTAssertFalse(invoked(sevenDir, "fake7zz-argv.log"))
+    }
+
+    func testEncrypted7zStaysOn7zz() throws {
+        let seven = try SevenZipEngine(binaryPath: try makeFake7zz(mode: "wrongPassword").path)
+        let xadFake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [
+                ["XADFileName": "legacy.txt", "XADFileSize": 6,
+                 "XADCompressedSize": 6, "XADIsDirectory": false,
+                 "XADIsEncrypted": false],
+            ]),
+            manifest: "legacy.txt|legacy\n")
+        let xad = XADMasterEngine(lsarPath: xadFake.lsar.path,
+                                  unarPath: xadFake.unar.path)
+        let router = EngineRouter(engines: [seven, xad])
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("secret.7z")
+        try "dummy archive bytes".write(to: archive, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try router.list(archive: archive, password: "pw")) { error in
+            guard case EngineError.wrongPassword = error else {
+                return XCTFail("expected wrongPassword, got \(error)")
+            }
+        }
+        XCTAssertFalse(invoked(xadFake.dir, "lsar-argv.log"),
+                       "XAD must never be tried for an encrypted 7z")
+    }
+
+    func testRouterPerFormatOverride() throws {
+        let (router, archive, _) = try router(sevenMode: "ok")
+        router.overrides["zip"] = .xad
+        let info = try router.list(archive: archive)
+        XCTAssertEqual(info.engine, "xad")
+    }
+
+    func testRouterListStreamingFallsBackBeforeFirstEntry() throws {
+        let (router, archive, _) = try router(sevenMode: "fail")
+        var seen: [String] = []
+        let info = try router.listStreaming(archive: archive) { entry in
+            seen.append(entry.path)
+            return true
+        }
+        XCTAssertEqual(info.engine, "xad")
+        XCTAssertEqual(seen, ["legacy.txt"])
+    }
+
+    func testRouterCancelDoesNotFallBack() throws {
+        let (router, archive, xadDir) = try router(sevenMode: "ok")
+        XCTAssertThrowsError(
+            try router.listStreaming(archive: archive) { _ in false }
+        ) { error in
+            guard case EngineError.cancelled = error else {
+                return XCTFail("expected cancelled, got \(error)")
+            }
+        }
+        XCTAssertFalse(invoked(xadDir, "lsar-argv.log"),
+                       "a cancel must not trigger a fallback run")
+    }
+
+    func testRouterConvertFromLegacyFormat() throws {
+        let seven = try SevenZipEngine(binaryPath: try makeFake7zz(mode: "ok").path)
+        let xadFake = try makeFakeXAD(
+            listing: try lsarJSON(entries: [
+                ["XADFileName": "hello.txt", "XADFileSize": 5,
+                 "XADCompressedSize": 5, "XADIsDirectory": false,
+                 "XADIsEncrypted": false],
+            ]),
+            manifest: "hello.txt|hello\n")
+        let xad = XADMasterEngine(lsarPath: xadFake.lsar.path,
+                                  unarPath: xadFake.unar.path)
+        let router = EngineRouter(engines: [seven, xad])
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("old.sit")
+        try "dummy archive bytes".write(to: archive, atomically: true, encoding: .utf8)
+        let dest = dir.appendingPathComponent("converted.zip")
+        try router.convert(archive: archive, to: dest)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    func testRouterSummaries() throws {
+        let (router, _, _) = try router(sevenMode: "ok")
+        let summaries = router.summaries()
+        XCTAssertEqual(summaries.map(\.id), ["7zz", "xad"])
+        XCTAssertTrue(summaries.allSatisfy(\.available))
+        let xadSummary = summaries[1]
+        XCTAssertTrue(xadSummary.capabilities.writeFormats.isEmpty)
+        XCTAssertFalse(xadSummary.capabilities.supportsEncrypted7z)
+        XCTAssertTrue(xadSummary.capabilities.readFormats.contains("sit"))
+        XCTAssertTrue(summaries[0].capabilities.supportsEncrypted7z)
+    }
+}
