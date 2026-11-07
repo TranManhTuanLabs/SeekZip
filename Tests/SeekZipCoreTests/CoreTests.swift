@@ -170,6 +170,55 @@ final class NestedPreviewTests: XCTestCase {
         XCTAssertEqual(chunks, 1)
     }
 
+    /// Regression test for CI #126: `verify` reported a CRC mismatch
+    /// (expected 762D6F5D, got 00000000) for `src/tiếng việt.txt` on
+    /// macOS while the same fixture verified fine on Linux. The entry
+    /// name in the listing is NFC (composed) but the name 7zz stores —
+    /// and matches against — can be NFD (decomposed) on macOS, and
+    /// `7zz e -so` with a non-matching name exits 0 with empty output,
+    /// so the entry hashed to the CRC of zero bytes. `streamEntry` must
+    /// retry with the alternate normalization instead of returning
+    /// empty content. Uses the real 7zz (CI installs it before unit
+    /// tests); skipped when no engine is installed.
+    func testStreamEntryRetriesAlternateNormalization() throws {
+        guard let engine = try? SevenZipEngine() else {
+            throw XCTSkip("real 7zz not installed")
+        }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let name = "tiếng việt.txt".precomposedStringWithCanonicalMapping
+        let file = dir.appendingPathComponent(name)
+        try "xin chào\n".write(to: file, atomically: true, encoding: .utf8)
+        let archive = dir.appendingPathComponent("nfc.zip")
+        let create = Process()
+        create.executableURL = engine.binaryURL
+        create.currentDirectoryURL = dir
+        create.arguments = ["a", "-tzip", archive.path, name]
+        create.standardOutput = FileHandle.nullDevice
+        create.standardError = FileHandle.nullDevice
+        try create.run()
+        create.waitUntilExit()
+        XCTAssertEqual(create.terminationStatus, 0, "fixture creation failed")
+
+        let info = try engine.list(archive: archive)
+        XCTAssertTrue(info.entries.contains { $0.path == name })
+        // Ask for the entry in the alternate (NFD) form: the stored
+        // name is NFC, so the first attempt matches nothing. (Compare
+        // bytes: Swift `String ==` treats NFC and NFD as equal.)
+        let nfd = name.decomposedStringWithCanonicalMapping
+        XCTAssertFalse(nfd.utf8.elementsEqual(name.utf8),
+                       "test needs a name with two normal forms")
+        var bytes = Data()
+        let completed = try engine.streamEntry(archive: archive, entry: nfd) { chunk in
+            bytes.append(chunk)
+            return true
+        }
+        XCTAssertTrue(completed)
+        XCTAssertEqual(String(decoding: bytes, as: UTF8.self), "xin chào\n")
+    }
+
     // MARK: Text preview
 
     func testPreviewText() throws {
