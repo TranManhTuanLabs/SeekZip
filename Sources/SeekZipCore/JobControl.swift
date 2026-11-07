@@ -46,27 +46,34 @@ public final class JobControl: @unchecked Sendable {
             _cancelled = true
             return process
         }
-        proc?.terminate()
+        // Never terminate a process that has not launched yet: on macOS
+        // Process.terminate() throws NSInvalidArgumentException ("task not
+        // launched") and the uncaught exception kills the whole process.
+        // The _cancelled flag is enough — the engine checks it right
+        // after launch and terminates the process itself.
+        if let proc, proc.isRunning { proc.terminate() }
     }
 
     /// Suspends the attached process with `SIGSTOP`. Safe to call
     /// before a process is attached: the process is stopped as soon as
     /// it is attached.
     public func pause() {
-        let pid: Int32? = synchronized {
+        let proc: Process? = synchronized {
             _paused = true
-            return process?.processIdentifier
+            return process
         }
-        if let pid { kill(pid, SIGSTOP) }
+        // processIdentifier is 0 before launch; kill(0, SIGSTOP) would
+        // stop our own process group. Only signal a running process.
+        if let proc, proc.isRunning { kill(proc.processIdentifier, SIGSTOP) }
     }
 
     /// Resumes a process suspended by `pause()` with `SIGCONT`.
     public func resume() {
-        let pid: Int32? = synchronized {
+        let proc: Process? = synchronized {
             _paused = false
-            return process?.processIdentifier
+            return process
         }
-        if let pid { kill(pid, SIGCONT) }
+        if let proc, proc.isRunning { kill(proc.processIdentifier, SIGCONT) }
     }
 
     /// Called by the engine when a subprocess starts. Applies any
@@ -76,8 +83,14 @@ public final class JobControl: @unchecked Sendable {
             self.process = process
             return (_cancelled, _paused)
         }
-        if shouldTerminate { process.terminate() }
-        if shouldStop { kill(process.processIdentifier, SIGSTOP) }
+        // The process has not launched yet at this point (the engine
+        // calls attach() before process.run()), so terminating it here
+        // would throw on macOS. The engine checks isCancelled right
+        // after launch and terminates it there instead.
+        if shouldTerminate, process.isRunning { process.terminate() }
+        if shouldStop, process.isRunning {
+            kill(process.processIdentifier, SIGSTOP)
+        }
     }
 
     func detach() {
