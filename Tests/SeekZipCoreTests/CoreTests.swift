@@ -853,3 +853,631 @@ final class StreamingEngineTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))
     }
 }
+
+// MARK: - M5: checksums (COR-02)
+
+final class ChecksumTests: XCTestCase {
+
+    func testCRC32KnownVectors() {
+        XCTAssertEqual(CRC32.hex(of: Data("123456789".utf8)), "CBF43926")
+        XCTAssertEqual(CRC32.hex(of: Data()), "00000000")
+        XCTAssertEqual(CRC32.hex(of: Data("abc".utf8)), "352441C2")
+        XCTAssertEqual(CRC32.checksum(of: Data("123456789".utf8)), 0xCBF43926)
+    }
+
+    func testCRC32AccumulatorMatchesOneShotAcrossChunks() {
+        let bytes = Data("hello world, this is a chunked checksum test".utf8)
+        var acc = CRC32.Accumulator()
+        for start in stride(from: 0, to: bytes.count, by: 3) {
+            acc.update(bytes[start..<min(start + 3, bytes.count)])
+        }
+        XCTAssertEqual(acc.hex(), CRC32.hex(of: bytes))
+        XCTAssertEqual(acc.finalize(), CRC32.checksum(of: bytes))
+    }
+
+    func testSHA256KnownVectors() {
+        XCTAssertEqual(SHA256.hex(of: Data()),
+                       "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+        XCTAssertEqual(SHA256.hex(of: Data("abc".utf8)),
+                       "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        XCTAssertEqual(SHA256.hex(of: Data("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq".utf8)),
+                       "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
+    }
+
+    func testSHA256AccumulatorMatchesOneShotAcrossChunks() {
+        let bytes = Data("the quick brown fox jumps over the lazy dog, twice over".utf8)
+        var acc = SHA256.Accumulator()
+        var offset = 0
+        while offset < bytes.count {
+            let end = min(offset + 7, bytes.count)
+            acc.update(bytes[offset..<end])
+            offset = end
+        }
+        XCTAssertEqual(acc.finalizeHex(), SHA256.hex(of: bytes))
+    }
+}
+
+// MARK: - M5: password storage (ENC-05)
+
+final class PasswordStoreTests: XCTestCase {
+
+    func testInMemoryStoreRoundTrip() throws {
+        let store = InMemoryPasswordStore()
+        XCTAssertNil(store.password(for: "/tmp/a.zip"))
+        try store.save(password: "hunter2", for: "/tmp/a.zip")
+        XCTAssertEqual(store.password(for: "/tmp/a.zip"), "hunter2")
+        XCTAssertNil(store.password(for: "/tmp/other.zip"))
+        try store.save(password: "second", for: "/tmp/a.zip")
+        XCTAssertEqual(store.password(for: "/tmp/a.zip"), "second")
+    }
+
+    func testInMemoryStoreForgetRemovesPassword() throws {
+        let store = InMemoryPasswordStore()
+        try store.save(password: "hunter2", for: "/tmp/a.zip")
+        try store.forget(archivePath: "/tmp/a.zip")
+        XCTAssertNil(store.password(for: "/tmp/a.zip"))
+        // Forgetting an unknown archive is not an error.
+        try store.forget(archivePath: "/tmp/a.zip")
+    }
+
+    func testExplicitPasswordWinsOverStored() throws {
+        let store = InMemoryPasswordStore()
+        try store.save(password: "stored-pw", for: "/tmp/a.zip")
+        let engine = try SevenZipEngine(binaryPath: "/bin/true")
+        engine.passwordStore = store
+        XCTAssertEqual(engine.resolvePassword(for: URL(fileURLWithPath: "/tmp/a.zip"),
+                                              explicit: "explicit-pw"),
+                       "explicit-pw")
+        XCTAssertEqual(engine.resolvePassword(for: URL(fileURLWithPath: "/tmp/a.zip"),
+                                              explicit: nil),
+                       "stored-pw")
+        XCTAssertNil(engine.resolvePassword(for: URL(fileURLWithPath: "/tmp/b.zip"),
+                                            explicit: nil))
+    }
+
+    #if canImport(Security)
+    // Keychain on real macOS (needs the Security framework and a
+    // keychain that accepts writes — not available on Linux CI).
+    func testKeychainStoreRoundTrip() throws {
+        let store = KeychainPasswordStore()
+        let path = "/tmp/seekzip-keychain-test-\(UUID().uuidString).zip"
+        try store.save(password: "keychain-pw", for: path)
+        XCTAssertEqual(store.password(for: path), "keychain-pw")
+        try store.forget(archivePath: path)
+        XCTAssertNil(store.password(for: path))
+    }
+    #else
+    // Linux has no Keychain (Security framework is macOS-only), so
+    // the shared store is the clearly-marked in-memory fallback —
+    // process lifetime only, never persisted. The Keychain test
+    // above runs on macOS CI instead.
+    func testSharedStoreIsInMemoryFallbackOnLinux() throws {
+        let path = "/tmp/seekzip-linux-store-\(UUID().uuidString).zip"
+        try PasswordStore.shared.save(password: "fallback-pw", for: path)
+        XCTAssertEqual(PasswordStore.shared.password(for: path), "fallback-pw")
+        try PasswordStore.shared.forget(archivePath: path)
+        XCTAssertNil(PasswordStore.shared.password(for: path))
+    }
+    #endif
+}
+
+// MARK: - M5: edit, convert, verify (EDT-01..07, COR-01..02)
+
+final class EditTests: XCTestCase {
+
+    private struct StatefulFake {
+        let script: URL
+        let stateDir: URL
+        let log: URL
+    }
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir,
+                                                withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// A stateful fake 7zz: a small Python script that keeps one
+    /// entry table per archive basename (JSON in `stateDir`), so add /
+    /// remove / rename / create / extract / stream all see the same
+    /// archive state. The engine's temp copies
+    /// (`.<name>.seekzip-tmp-<uuid>`) and create staging dirs map
+    /// back to the same basename key, exactly like a real archive
+    /// file would. Every invocation's argv is appended to `log`
+    /// (one JSON array per line). Entries can be seeded from Swift;
+    /// writing `corrupt.json` in the state dir makes `e -so` stream
+    /// wrong bytes for those entries (verify test). With
+    /// `failAdd`, `a` exits 3 before touching anything.
+    private func makeStatefulFake(failAdd: Bool = false) throws -> StatefulFake {
+        let dir = try tempDir()
+        let stateDir = dir.appendingPathComponent("state")
+        try FileManager.default.createDirectory(at: stateDir,
+                                                withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("fake7zz")
+        let log = dir.appendingPathComponent("argv.log")
+        let text = """
+        #!/usr/bin/env python3
+        import sys, os, json, base64, zlib
+
+        STATE_DIR = "\(stateDir.path)"
+        LOG = "\(log.path)"
+        FAIL_ADD = \(failAdd ? "True" : "False")
+        NL = chr(10)
+
+        def log_args():
+            with open(LOG, "a") as f:
+                f.write(json.dumps(sys.argv[1:]) + NL)
+
+        def key(archive):
+            base = os.path.basename(archive)
+            if base.startswith("."):
+                base = base[1:]
+            if ".seekzip-tmp-" in base:
+                base = base.split(".seekzip-tmp-")[0]
+            return base
+
+        def state_path(archive):
+            return os.path.join(STATE_DIR, key(archive) + ".json")
+
+        def load(archive):
+            p = state_path(archive)
+            if os.path.exists(p):
+                with open(p) as f:
+                    return json.load(f)
+            return {"entries": []}
+
+        def save(archive, st):
+            with open(state_path(archive), "w") as f:
+                json.dump(st, f)
+
+        def crc_hex(data):
+            return "%08X" % (zlib.crc32(data) & 0xFFFFFFFF)
+
+        def listing(archive):
+            st = load(archive)
+            out = []
+            out.append("7-Zip (z) 24.09")
+            out.append("")
+            out.append("Listing archive: " + archive)
+            out.append("")
+            out.append("--")
+            out.append("Path = " + archive)
+            out.append("Type = zip")
+            out.append("Physical Size = 1234")
+            out.append("")
+            out.append("----------")
+            out.append("")
+            for e in st["entries"]:
+                content = base64.b64decode(e["content"])
+                out.append("Path = " + e["path"])
+                out.append("Folder = " + ("+" if e.get("dir") else "-"))
+                out.append("Size = %d" % len(content))
+                out.append("CRC = " + crc_hex(content))
+                out.append("")
+            sys.stdout.write(NL.join(out))
+
+        def non_flags(args):
+            return [a for a in args if not a.startswith("-")]
+
+        def add_entries(archive, names):
+            if FAIL_ADD:
+                sys.stderr.write("simulated add failure" + NL)
+                sys.exit(3)
+            st = load(archive)
+            by_path = {}
+            for e in st["entries"]:
+                by_path[e["path"]] = e
+            for name in names:
+                p = name if os.path.isabs(name) else os.path.join(os.getcwd(), name)
+                if os.path.isdir(p):
+                    for root, dirs, files in os.walk(p):
+                        for fn in files:
+                            fp = os.path.join(root, fn)
+                            rel = os.path.relpath(fp, p)
+                            en = (name + "/" + rel) if not os.path.isabs(name) else (os.path.basename(p) + "/" + rel)
+                            with open(fp, "rb") as f:
+                                data = f.read()
+                            by_path[en] = {"path": en, "content": base64.b64encode(data).decode()}
+                elif os.path.isfile(p):
+                    en = name if not os.path.isabs(name) else os.path.basename(p)
+                    with open(p, "rb") as f:
+                        data = f.read()
+                    by_path[en] = {"path": en, "content": base64.b64encode(data).decode()}
+            st["entries"] = list(by_path.values())
+            save(archive, st)
+            with open(archive, "wb") as f:
+                f.write(b"fake archive" + NL.encode())
+
+        def remove_entries(archive, names):
+            st = load(archive)
+            st["entries"] = [e for e in st["entries"] if e["path"] not in names]
+            save(archive, st)
+
+        def rename_entries(archive, pairs):
+            st = load(archive)
+            mapping = {}
+            i = 0
+            while i + 1 < len(pairs):
+                mapping[pairs[i]] = pairs[i + 1]
+                i += 2
+            for e in st["entries"]:
+                if e["path"] in mapping:
+                    e["path"] = mapping[e["path"]]
+            save(archive, st)
+
+        def corrupt_set():
+            p = os.path.join(STATE_DIR, "corrupt.json")
+            if os.path.exists(p):
+                with open(p) as f:
+                    return set(json.load(f).get("entries", []))
+            return set()
+
+        def stream_entry(archive, entry):
+            st = load(archive)
+            for e in st["entries"]:
+                if e["path"] == entry:
+                    if entry in corrupt_set():
+                        sys.stdout.buffer.write(b"corrupted bytes, not the real content")
+                    else:
+                        sys.stdout.buffer.write(base64.b64decode(e["content"]))
+                    return
+            sys.stderr.write("ERROR: No such entry" + NL)
+            sys.exit(2)
+
+        def extract(archive, dest, names):
+            st = load(archive)
+            wanted = set(names) if names else None
+            for e in st["entries"]:
+                if wanted is not None and e["path"] not in wanted:
+                    continue
+                target = os.path.join(dest, e["path"])
+                os.makedirs(os.path.dirname(target), exist_ok=True)
+                with open(target, "wb") as f:
+                    f.write(base64.b64decode(e["content"]))
+
+        def main():
+            log_args()
+            args = sys.argv[1:]
+            if not args:
+                sys.exit(2)
+            cmd = args[0]
+            if cmd == "l":
+                listing(non_flags(args[1:])[0])
+            elif cmd == "t":
+                pass
+            elif cmd == "a":
+                rest = non_flags(args[1:])
+                add_entries(rest[0], rest[1:])
+            elif cmd == "d":
+                rest = non_flags(args[1:])
+                remove_entries(rest[0], rest[1:])
+            elif cmd == "rn":
+                rest = non_flags(args[1:])
+                rename_entries(rest[0], rest[1:])
+            elif cmd == "e":
+                rest = non_flags(args[1:])
+                stream_entry(rest[0], rest[1])
+            elif cmd == "x":
+                dest = ""
+                rest = []
+                for a in args[1:]:
+                    if a.startswith("-o"):
+                        dest = a[2:]
+                    elif a.startswith("-"):
+                        continue
+                    else:
+                        rest.append(a)
+                extract(rest[0], dest, rest[1:])
+            else:
+                sys.exit(2)
+
+        main()
+        """
+        try text.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        return StatefulFake(script: script, stateDir: stateDir, log: log)
+    }
+
+    /// Seeds the fake's entry table for `url` (keyed by basename)
+    /// and creates the archive file itself, so the engine can copy
+    /// it for the temp-copy edit path.
+    private func seedArchive(_ fake: StatefulFake, at url: URL,
+                             entries: [(path: String, content: String)]) throws {
+        let state: [String: [[String: String]]] = ["entries": entries.map {
+            ["path": $0.path,
+             "content": Data($0.content.utf8).base64EncodedString()]
+        }]
+        let data = try JSONSerialization.data(withJSONObject: state)
+        try data.write(to: fake.stateDir
+            .appendingPathComponent(url.lastPathComponent + ".json"))
+        try "seed archive".write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    private func engine(for fake: StatefulFake) throws -> SevenZipEngine {
+        try SevenZipEngine(binaryPath: fake.script.path)
+    }
+
+    private func argvLog(_ fake: StatefulFake) -> [[String]] {
+        let text = (try? String(contentsOf: fake.log, encoding: .utf8)) ?? ""
+        return text.split(separator: "\n").compactMap { line in
+            guard let data = line.data(using: .utf8),
+                  let arr = try? JSONSerialization.jsonObject(with: data) as? [String]
+            else { return nil }
+            return arr
+        }
+    }
+
+    private func entryPaths(_ engine: SevenZipEngine, _ archive: URL) throws -> [String] {
+        try engine.list(archive: archive).entries.map(\.path)
+    }
+
+    // MARK: Add / remove / rename (EDT-01..04)
+
+    func testAddEntriesToZip() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive, entries: [("hello.txt", "hello")])
+        let src = dir.appendingPathComponent("new.txt")
+        try "brand new".write(to: src, atomically: true, encoding: .utf8)
+        try engine.addEntries(archive: archive, sources: [src])
+        let info = try engine.list(archive: archive)
+        XCTAssertEqual(info.entries.map(\.path).sorted(), ["hello.txt", "new.txt"])
+        XCTAssertEqual(info.entries.first(where: { $0.path == "new.txt" })?.crc,
+                       CRC32.hex(of: Data("brand new".utf8)))
+        XCTAssertTrue(argvLog(fake).contains { $0.first == "a" && $0.contains("-tzip") })
+    }
+
+    func testAddEntriesWithPrefix() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive, entries: [])
+        let src = dir.appendingPathComponent("note.txt")
+        try "noted".write(to: src, atomically: true, encoding: .utf8)
+        try engine.addEntries(archive: archive, sources: [src], prefix: "docs")
+        XCTAssertEqual(try entryPaths(engine, archive), ["docs/note.txt"])
+    }
+
+    func testAddEntriesRejectsUnsafePrefix() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive, entries: [])
+        let src = dir.appendingPathComponent("note.txt")
+        try "noted".write(to: src, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(
+            try engine.addEntries(archive: archive, sources: [src],
+                                  prefix: "../escape"))
+        XCTAssertEqual(try entryPaths(engine, archive), [])
+    }
+
+    func testRemoveEntries() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive,
+                        entries: [("a.txt", "aaa"), ("b.txt", "bbb"),
+                                  ("c.txt", "ccc")])
+        try engine.removeEntries(archive: archive, entries: ["b.txt"])
+        XCTAssertEqual(try entryPaths(engine, archive), ["a.txt", "c.txt"])
+        XCTAssertThrowsError(
+            try engine.removeEntries(archive: archive, entries: ["nope.txt"])
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("entry not found"))
+        }
+        // The failed remove left the archive alone.
+        XCTAssertEqual(try entryPaths(engine, archive), ["a.txt", "c.txt"])
+    }
+
+    func testRenameEntriesZipAnd7z() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let zip = dir.appendingPathComponent("x.zip")
+        try seedArchive(fake, at: zip, entries: [("old.txt", "old content")])
+        try engine.renameEntries(archive: zip,
+                                 renames: [(old: "old.txt", new: "new.txt")])
+        XCTAssertEqual(try entryPaths(engine, zip), ["new.txt"])
+        let sevenZ = dir.appendingPathComponent("y.7z")
+        try seedArchive(fake, at: sevenZ, entries: [("old.txt", "old content")])
+        try engine.renameEntries(archive: sevenZ,
+                                 renames: [(old: "old.txt", new: "renamed.txt")])
+        XCTAssertEqual(try entryPaths(engine, sevenZ), ["renamed.txt"])
+    }
+
+    func testRenameToExistingNameFails() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive,
+                        entries: [("a.txt", "aaa"), ("b.txt", "bbb")])
+        XCTAssertThrowsError(
+            try engine.renameEntries(archive: archive,
+                                     renames: [(old: "a.txt", new: "b.txt")])
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("already exists"))
+        }
+        XCTAssertEqual(try entryPaths(engine, archive), ["a.txt", "b.txt"])
+    }
+
+    func testRenameTarFailsClearly() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.tar")
+        try seedArchive(fake, at: archive, entries: [("old.txt", "old")])
+        XCTAssertThrowsError(
+            try engine.renameEntries(archive: archive,
+                                     renames: [(old: "old.txt", new: "new.txt")])
+        ) { error in
+            XCTAssertTrue(String(describing: error)
+                .contains("only supported for ZIP and 7z"))
+        }
+        XCTAssertEqual(try entryPaths(engine, archive), ["old.txt"])
+    }
+
+    func testAddToRarFailsClearly() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.rar")
+        try seedArchive(fake, at: archive, entries: [("a.txt", "aaa")])
+        let src = dir.appendingPathComponent("new.txt")
+        try "new".write(to: src, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(
+            try engine.addEntries(archive: archive, sources: [src])
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("only ZIP, 7z and TAR"))
+        }
+        XCTAssertEqual(try entryPaths(engine, archive), ["a.txt"])
+    }
+
+    // MARK: Temp-name safety on failed edit (PERF-05 / EDT-05)
+
+    func testFailedAddLeavesOriginalUntouched() throws {
+        let fake = try makeStatefulFake(failAdd: true)
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive, entries: [("hello.txt", "hello")])
+        let before = try Data(contentsOf: archive)
+        let src = dir.appendingPathComponent("new.txt")
+        try "brand new".write(to: src, atomically: true, encoding: .utf8)
+        XCTAssertThrowsError(try engine.addEntries(archive: archive, sources: [src]))
+        // Byte-for-byte the same file, same listing, no temp leftovers.
+        XCTAssertEqual(try Data(contentsOf: archive), before)
+        XCTAssertEqual(try entryPaths(engine, archive), ["hello.txt"])
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .filter { $0.contains("seekzip-tmp-") }
+        XCTAssertTrue(leftovers.isEmpty, "temp left behind: \(leftovers)")
+    }
+
+    // MARK: Conversion (EDT-06)
+
+    func testConvertZipTo7zAndBack() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("src.zip")
+        try seedArchive(fake, at: src,
+                        entries: [("a.txt", "hello zip"), ("b.txt", "second file")])
+        let before = try engine.list(archive: src)
+        let sevenZ = dir.appendingPathComponent("out.7z")
+        try engine.convert(archive: src, to: sevenZ)
+        let converted = try engine.list(archive: sevenZ)
+        XCTAssertEqual(converted.entries.map(\.path).sorted(), ["a.txt", "b.txt"])
+        for entry in before.entries {
+            XCTAssertEqual(converted.entries.first(where: { $0.path == entry.path })?.crc,
+                           entry.crc, "CRC changed for \(entry.path) in conversion")
+        }
+        let roundTrip = dir.appendingPathComponent("roundtrip.zip")
+        try engine.convert(archive: sevenZ, to: roundTrip)
+        let back = try engine.list(archive: roundTrip)
+        XCTAssertEqual(back.entries.map(\.path).sorted(), ["a.txt", "b.txt"])
+        for entry in before.entries {
+            XCTAssertEqual(back.entries.first(where: { $0.path == entry.path })?.crc,
+                           entry.crc, "CRC changed for \(entry.path) on the way back")
+        }
+        // The source archive was never modified.
+        XCTAssertEqual(try entryPaths(engine, src), ["a.txt", "b.txt"])
+    }
+
+    func testConvertToRarFailsClearly() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("src.zip")
+        try seedArchive(fake, at: src, entries: [("a.txt", "aaa")])
+        let dest = dir.appendingPathComponent("out.rar")
+        XCTAssertThrowsError(try engine.convert(archive: src, to: dest)) { error in
+            XCTAssertTrue(String(describing: error).contains("RAR cannot be created"))
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dest.path))
+    }
+
+    // MARK: Checksums and verify (COR-01..02, EDT-07)
+
+    func testEntryChecksumsFromListing() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive,
+                        entries: [("a.txt", "aaa"), ("b.txt", "bbb")])
+        let checksums = try engine.entryChecksums(archive: archive)
+        XCTAssertEqual(checksums.map(\.path), ["a.txt", "b.txt"])
+        XCTAssertEqual(checksums[0].crc, CRC32.hex(of: Data("aaa".utf8)))
+        XCTAssertEqual(checksums[1].crc, CRC32.hex(of: Data("bbb".utf8)))
+        XCTAssertEqual(checksums[0].size, 3)
+    }
+
+    func testVerifyAllOkWithSHA256() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive,
+                        entries: [("a.txt", "aaa"), ("b.txt", "bbb")])
+        let results = try engine.verify(archive: archive, includeSHA256: true)
+        XCTAssertEqual(results.map(\.entryPath), ["a.txt", "b.txt"])
+        XCTAssertTrue(results.allSatisfy { $0.status == .ok })
+        XCTAssertEqual(results[0].sha256, SHA256.hex(of: Data("aaa".utf8)))
+        XCTAssertEqual(results[0].expectedCRC, CRC32.hex(of: Data("aaa".utf8)))
+        XCTAssertEqual(results[0].actualCRC, CRC32.hex(of: Data("aaa".utf8)))
+    }
+
+    func testVerifyDetectsCorruptedEntry() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive,
+                        entries: [("good.txt", "good content"),
+                                  ("bad.txt", "real content")])
+        // The fake streams wrong bytes for bad.txt, but the listing
+        // still reports the CRC of the real content — exactly what a
+        // corrupted entry looks like to `verify`.
+        let corrupt: [String: [String]] = ["entries": ["bad.txt"]]
+        let corruptData = try JSONSerialization.data(withJSONObject: corrupt)
+        try corruptData.write(to: fake.stateDir.appendingPathComponent("corrupt.json"))
+        let results = try engine.verify(archive: archive)
+        XCTAssertEqual(results.count, 2)
+        XCTAssertEqual(results.first(where: { $0.entryPath == "good.txt" })?.status, .ok)
+        let bad = results.first(where: { $0.entryPath == "bad.txt" })
+        XCTAssertEqual(bad?.status, .mismatch)
+        XCTAssertEqual(bad?.expectedCRC, CRC32.hex(of: Data("real content".utf8)))
+        XCTAssertEqual(bad?.actualCRC,
+                       CRC32.hex(of: Data("corrupted bytes, not the real content".utf8)))
+    }
+
+    // MARK: Password reaches 7zz (ENC-05)
+
+    func testStoredPasswordIsPassedTo7zz() throws {
+        let fake = try makeStatefulFake()
+        let engine = try engine(for: fake)
+        let store = InMemoryPasswordStore()
+        engine.passwordStore = store
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent("a.zip")
+        try seedArchive(fake, at: archive, entries: [("a.txt", "aaa")])
+        try store.save(password: "stored-pw", for: archive.path)
+        _ = try engine.list(archive: archive)
+        let listCall = argvLog(fake).first { $0.first == "l" }
+        XCTAssertTrue(listCall?.contains("-pstored-pw") ?? false,
+                      "stored password was not passed to 7zz: \(String(describing: listCall))")
+        // An explicit password wins over the stored one.
+        _ = try engine.list(archive: archive, password: "explicit-pw")
+        let listCalls = argvLog(fake).filter { $0.first == "l" }
+        XCTAssertTrue(listCalls.last?.contains("-pexplicit-pw") ?? false)
+        XCTAssertFalse(listCalls.last?.contains("-pstored-pw") ?? true)
+    }
+}
