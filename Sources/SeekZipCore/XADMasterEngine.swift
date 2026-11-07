@@ -94,6 +94,8 @@ public final class XADMasterEngine: ArchiveEngine, @unchecked Sendable {
     }
 
     private static func findBinary(named name: String) -> URL? {
+        // M7: the packaged app bundles lsar/unar in Resources/Helpers.
+        if let bundled = BundledEngines.url(named: name) { return bundled }
         for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
             let candidate = URL(fileURLWithPath: dir).appendingPathComponent(name)
             if FileManager.default.isExecutableFile(atPath: candidate.path) {
