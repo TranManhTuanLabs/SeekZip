@@ -57,7 +57,10 @@ M1 已通过：`swift build` + `swift test` + CLI 冒烟测试在 CI（macos-15�
 `list --stream`）。M3 已完成：预览（文本经 `7zz e -so` 流式读入，上限
 64 KB / 200 行；图片、PDF 与二进制文件交由 Quick Look）与嵌套归档
 （`list outer.zip inner.zip`、`preview outer.zip "inner.zip!/file.txt"`）。
-GUI 预览接线目前仅为代码，需待 M7 的 Xcode 工程。
+GUI 预览接线目前仅为代码，需待 M7 的 Xcode 工程。M4 已完成：持久化任务
+队列——批量解压/创建/测试，支持暂停/继续/取消、临时名 + 原子重命名创建、
+磁盘空间预检、干净的 Ctrl-C 处理——通过 `seekzip queue` 与 MCP 队列工具
+使用。GUI 队列面板目前仅为代码，需待 M7 的 Xcode 工程。
 
 ## 构建（在 Mac 上）
 
@@ -66,6 +69,23 @@ swift build          # core + CLI + MCP（GUI 需要完整 Xcode，见 Package.s
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
+
+## 队列
+
+```sh
+seekzip queue add extract big.zip ~/out   # 入队，暂不运行
+seekzip queue add create out.7z src --format 7z
+seekzip queue run                         # 按顺序运行已入队的任务
+seekzip queue list                        # 持久化任务——重启应用后仍在
+seekzip queue pause <id>                  # SIGSTOP；恢复后原地继续
+seekzip queue cancel <id>                 # 终止 7zz，清理临时输出
+```
+
+任务逐个顺序运行，保存在
+`~/Library/Application Support/SeekZip/queue.json`。创建归档时，7zz
+先写入暂存目录，成功后才重命名到位，因此取消或失败的创建不会留下
+写了一半的文件。解压与创建都会先检查剩余空间，目标卷空间不足时
+立即报错。密码仅保留在内存中，永不写入队列文件。
 
 RAR 归档可以解压但不能创建——RAR 的创建是专有技术
 （所有 macOS 归档工具都是如此）。
