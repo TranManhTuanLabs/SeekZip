@@ -176,8 +176,7 @@ func printJobs(_ jobs: [JobRecord]) {
 
 do {
     // M6: the router owns both engines. `--engine` selects one
-    // operation's engine (auto = 7zz first, XAD fallback); preview
-    // keeps the raw 7zz engine (entry streaming is 7zz-only).
+    // operation's engine (auto = 7zz first, XAD fallback).
     // 7zz is optional here so `seekzip engines` can run (and report
     // it missing) on a machine without 7zz; commands that need it
     // fail clearly when it is absent.
@@ -235,12 +234,12 @@ do {
         printListing(info)
     case "preview":
         guard positional.count >= 3 else { fail(2, "preview needs <archive> <entry>") }
-        guard let realSevenZip = sevenZip as? SevenZipEngine else {
-            fail(3, "7zz engine binary not found")
-        }
         let archiveURL = URL(fileURLWithPath: positional[1])
         let entryPath = positional[2]
-        let provider = PreviewProvider(engine: realSevenZip)
+        // M7: preview goes through the router — an XAD-only archive
+        // previews via a temporary extraction (PreviewProvider
+        // fallback); streaming itself stays 7zz-only.
+        let provider = PreviewProvider(engine: engine)
         if entryPath.contains("!/") {
             // M3 nested preview: "inner.zip!/deep.zip!/file.txt".
             let parts = entryPath.split(separator: "!/").map(String.init)
