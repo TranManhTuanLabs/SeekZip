@@ -8,7 +8,8 @@ Docs: [Build from zero](docs/BUILD_FROM_ZERO.md) ·
 [Architecture](docs/ARCHITECTURE.md) ·
 [Test matrix](docs/TEST-MATRIX.md) ·
 [Agent handoff](docs/HANDOFF.md) ·
-[Reference research](docs/REFERENCE.md)
+[Reference research](docs/REFERENCE.md) ·
+[Release guide](docs/RELEASE.md)
 (each also available in Tiếng Việt and 简体中文 with `.vi.md` / `.zh-CN.md` suffixes)
 
 A free, native macOS archive manager for Apple Silicon — browse and preview
@@ -79,6 +80,19 @@ in entry metadata), CLI `--engine auto|7zz|xad` + `seekzip engines`, MCP `engine
 GUI engine settings (code only until the M7 Xcode project). `seekzip list/test/extract` report which engine
 handled the archive.
 
+M7 done: extensions & packaging — `SeekZip.xcodeproj` (app + Finder
+Sync + Quick Look preview extensions, sharing SeekZipCore as a static
+library and engine settings through an App Group), the 7zz/lsar/unar
+binaries staged by `scripts/package-engines.sh` (7-Zip 26.05,
+SHA-256-pinned) into the app bundle's `Resources/Helpers/` and signed
+with the inherit entitlement, `scripts/release.sh` (archive, Developer
+ID export, notarise, staple, DMG/ZIP), and Homebrew formula + cask in
+`packaging/homebrew/` (tap `TranManhTuanLabs/homebrew-seekzip`). The
+XAD preview gap from M6 is closed: previewing an entry of an XAD-only
+archive now extracts just that entry to a temp dir and reads the
+capped head (same 64 KB / 200-line rules). The GUI still needs its
+first real build on a Mac with full Xcode — see `docs/RELEASE.md`.
+
 ## Build (on a Mac)
 
 ```sh
@@ -86,6 +100,18 @@ swift build          # core + CLI + MCP (GUI needs full Xcode, see Package.swift
 swift test           # unit tests for parser and path safety
 ./Tests/Matrix/generate-matrix.sh   # build the edge-case fixture archives
 ```
+
+App (Xcode project — first build needs a Mac with full Xcode):
+
+```sh
+open SeekZip.xcodeproj   # set your Team, then Product > Build (⌘B)
+./scripts/package-engines.sh   # stage 7zz/lsar/unar into build/Helpers
+./scripts/release.sh           # archive, notarise, DMG (needs DEVELOPER_TEAM_ID)
+```
+
+See `docs/RELEASE.md` for the full release checklist, including the
+Apple Developer account and disk-space questions that must be settled
+before the first signed release.
 
 ## Queue
 
