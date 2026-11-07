@@ -15,7 +15,7 @@ Updated after every milestone. Agent times come from the runtime
 | M3 — Preview + nested | 06:28 → 07:03 | ~35m | 18 commits. |
 | M4 — Queue | 07:05 → 07:22 | ~17m | 12 commits. Pushed the old way (one file at a time, approvals spread out). |
 | M5 — Create/edit polish | 07:22 → 07:46 | ~24m | 14 files in one batch push (2 new: Checksums.swift, PasswordStore.swift). Local work ~15m (swift test 67/67 green, swift build green); batch push 07:39–07:43, 14 approval cards, all approved in seconds, no expiries; CI run 42319888603 green 07:44 (build + tests + fixtures + smoke, all steps). |
-| M6 — XAD fallback engine | 07:54 → 08:11 local, push/CI times below | ~17m local | 14 files in one batch push (2 new: ArchiveEngine.swift, XADMasterEngine.swift). Local work ~17m: protocol + router + XAD engine + CLI/MCP/GUI wiring, swift test 89/89 green (22 new), CLI + MCP smoke-tested end-to-end with fake 7zz/lsar/unar (real binaries not on the Linux VM). Push + CI times to be finalized after the run. |
+| M6 — XAD fallback engine | 07:54 → 08:28 | ~17m local, ~14m push, ~3m CI | 16 files in one batch push (2 new: ArchiveEngine.swift, XADMasterEngine.swift) + 1 TIMELOG finalize commit. Local work 07:54–08:11 (~17m: protocol + router + XAD engine + CLI/MCP/GUI wiring, swift test 89/89 green (22 new), CLI + MCP smoke-tested end-to-end with fake 7zz/lsar/unar — real binaries not on the Linux VM). Batch push 08:11–08:25, 16 approval cards, no expiries; first card waited ~11 min (owner away), the rest approved in seconds. CI run 42324029579 on head 128c5e7 green (build + tests + fixtures + smoke, all steps). |
 
 ## Approval waiting time (measured sample, latest history page, 20 approvals)
 
