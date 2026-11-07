@@ -20,13 +20,15 @@ seekzip-mcp (MCP) ────┘        │
 | `SeekZipCore/ArchiveEntry.swift` | `ArchiveEntry`, `ArchiveInfo` value models (Codable — the same shapes the CLI prints as JSON and MCP returns) |
 | `SeekZipCore/ListingParser.swift` | Parses `7zz l -slt` technical listings into models |
 | `SeekZipCore/EntryPathSafety.swift` | Zip-slip / absolute-path / symlink policy, zip-bomb heuristic |
-| `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create, nested listing, entry streaming; cancellable/pausable runs with `-bsp1` progress (M4), temp-staged atomic creation (M4) |
+| `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create, nested listing, entry streaming; cancellable/pausable runs with `-bsp1` progress (M4), temp-staged atomic creation (M4); edit in place — add/remove/rename (M5), convert (M5), `entryChecksums`/`verify` (M5) |
 | `SeekZipCore/PreviewProvider.swift` | Entry previews (M3): text streams in capped at 64 KB / 200 lines, images/PDF/binary defer to Quick Look |
 | `SeekZipCore/JobControl.swift` | Pause (SIGSTOP) / resume (SIGCONT) / cancel (SIGTERM) handle for a running `7zz` process, plus `JobProgress` (M4) |
 | `SeekZipCore/JobQueue.swift` | Persistent sequential job queue (M4): `JobDescriptor`/`JobRecord`, atomic JSON store, `DiskSpace` free-space precheck |
-| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping, `queue` subcommands, Ctrl-C via DispatchSource (M4) |
-| `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core; `queue_*` tools on a background runner (M4) |
-| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation, queue panel (M4) |
+| `SeekZipCore/Checksums.swift` | Pure-Swift CRC-32 (IEEE) and SHA-256 (FIPS 180-4), one-shot + streaming accumulators (M5) — no CryptoKit, so it runs on the Linux test toolchain too |
+| `SeekZipCore/PasswordStore.swift` | `PasswordStoring` protocol; Keychain on macOS (Security framework, service `com.seekzip.passwords`) and an in-memory fallback on Linux, tests only (M5) |
+| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping, `queue` subcommands, Ctrl-C via DispatchSource (M4); `add`/`remove`/`rename`/`convert`/`verify`/`checksums`/`password` subcommands, `SEEKZIP_PASSWORD` (M5) |
+| `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core; `queue_*` tools on a background runner (M4); `add_entries`/`remove_entries`/`rename_entries`/`convert_archive`/`verify_archive` (M5) |
+| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation, queue panel (M4), edit row + CRC column (M5) |
 
 ## 3. Data flow — listing an archive
 
@@ -101,7 +103,9 @@ stderr.
 
 **MCP tools**: `list_archive`, `test_archive`, `extract_entries`,
 `create_archive`, `queue_enqueue`, `queue_list`, `queue_pause`,
-`queue_resume`, `queue_cancel` — schemas in `SeekZipMCP/main.swift`.
+`queue_resume`, `queue_cancel`, `add_entries`, `remove_entries`,
+`rename_entries`, `convert_archive`, `verify_archive` — schemas in
+`SeekZipMCP/main.swift`.
 The server speaks newline-delimited JSON-RPC 2.0 on stdio (MCP
 `2024-11-05`). Queue tools share the CLI's persistent store and run
 jobs on a background thread (M4).
@@ -119,9 +123,13 @@ jobs on a background thread (M4).
 4. **Atomic results**: operations write to temp names and rename on
    success. Creation writes into a staging directory in the
    destination directory and POSIX-renames into place (M4); a
-   cancelled/failed create leaves no half-written file. Extraction
-   destinations are excepted (entries land directly; a cancelled
-   extract may leave partial entries, re-running overwrites them).
+   cancelled/failed create leaves no half-written file. Edits work on
+   a temp copy of the archive in the same directory and POSIX-rename
+   over the original only after the edited copy lists cleanly (M5); a
+   failed edit leaves the original byte-for-byte untouched.
+   Extraction destinations are excepted (entries land directly; a
+   cancelled extract may leave partial entries, re-running overwrites
+   them).
 5. **Clean-room**: behaviour and public contracts may be learned from
    reference projects; code may not be copied (MacPacker is GPL-3.0).
 
