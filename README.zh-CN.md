@@ -65,7 +65,7 @@ GUI 预览接线目前仅为代码，需待 M7 的 Xcode 工程。M4 已完成�
 重命名，失败的编辑绝不会损坏原文件）、格式转换（ZIP ↔ 7z ↔ TAR；无法
 创建 RAR）、逐条目的 CRC-32/SHA-256 校验与 `verify` 命令，以及密码存入
 macOS Keychain（另一通道为 `SEEKZIP_PASSWORD` 环境变量，绝不使用 `-p`
-参数）。GUI 编辑面板与 CRC 列目前仅为代码，需待 M7 的 Xcode 工程。
+参数）。GUI 编辑面板与 CRC 列目前仅为代码，需待 M7 的 Xcode 工程。M6 已完成：路由协议后的 XAD 备用引擎——带能力矩阵的 `ArchiveEngine`、`EngineRouter`（优先 7zz，失败或空列表时回退到 XAD；StuffIt/Zoo/ARC 等旧格式优先 XAD；加密 7z 始终使用 7zz）、经 `lsar`/`unar` 的 XAD 列表/解压/测试（仅解压，通过暂存目录解压故失败不留残余文件，恢复的文件名编码保留在条目元数据中）、CLI `--engine auto|7zz|xad` 与 `seekzip engines`、MCP 的 `engine` 参数与 `list_engines` 工具、GUI 引擎设置（目前仅为代码，需待 M7 的 Xcode 工程）。`seekzip list/test/extract` 会报告处理该归档的引擎。
 
 ## 构建（在 Mac 上）
 
