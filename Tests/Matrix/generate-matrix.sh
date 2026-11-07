@@ -34,6 +34,12 @@ head -c 1048576 /dev/urandom > src/random-1mb.bin
 mkdir -p many && i=1; while [ $i -le 2000 ]; do printf '%s' "$i" > "many/f$i.txt"; i=$((i+1)); done
 "$SEVEN" a -tzip many-entries.zip many >/dev/null
 
+# Large archive for the streaming-list smoke test (ci.yml).
+# Kept in its own directory so the src/ tree — and plain.zip etc. —
+# stay exactly as they were.
+mkdir -p big && head -c 10485760 /dev/urandom > big/random-10mb.bin
+"$SEVEN" a -tzip big.zip big >/dev/null
+
 # Corrupted copies
 cp plain.zip truncated.zip && truncate -s 40 truncated.zip
 cp plain.zip bitflip.zip && printf 'XXXX' | dd of=bitflip.zip bs=1 seek=60 conv=notrunc 2>/dev/null
