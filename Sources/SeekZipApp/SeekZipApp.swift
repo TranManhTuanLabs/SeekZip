@@ -34,6 +34,13 @@ struct BrowserView: View {
     @State private var nestedPath: [String] = []
     @State private var preview: EntryPreview?
     @State private var showPreview = false
+    // M4: the persistent job queue (batch extract/create/test).
+    // Code only — NOT compiled by SwiftPM yet: it needs full Xcode
+    // for SwiftUIMacros, and the M7 Xcode project is where this file
+    // first builds. Jobs run on a background Task; pause/resume/cancel
+    // go through JobQueue, and the list survives app relaunch.
+    @State private var queueJobs: [JobRecord] = []
+    @State private var queue: JobQueue?
 
     private var shownEntries: [ArchiveEntry] {
         guard let info else { return [] }
@@ -101,12 +108,83 @@ struct BrowserView: View {
                     .frame(maxHeight: 220)
             }
 
+            // M4: queue panel — batch jobs with pause/resume/cancel.
+            if !queueJobs.isEmpty {
+                Divider()
+                queuePanel
+            }
+
             Divider()
             Text(status).font(.footnote).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(6)
         }
         .frame(minWidth: 640, minHeight: 420)
+    }
+
+    /// M4: the queue panel. Jobs are persisted by `JobQueue`, so this
+    /// list is the same after an app relaunch; interrupted jobs show
+    /// as such and resume explicitly.
+    private var queuePanel: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text("Queue").font(.headline)
+                Spacer()
+                Button("Refresh") { refreshQueue() }
+                    .font(.caption)
+            }
+            ForEach(queueJobs) { job in
+                HStack {
+                    Text(job.descriptor.kind.rawValue).font(.caption)
+                    Text(job.descriptor.archive).lineLimit(1).font(.caption)
+                    Spacer()
+                    if let fraction = job.progress {
+                        ProgressView(value: fraction).frame(width: 80)
+                    }
+                    Text(job.status.rawValue).font(.caption)
+                        .foregroundStyle(.secondary)
+                    if job.status == .running || job.status == .queued {
+                        Button("Pause") { queue?.pause(id: job.id); refreshQueue() }
+                            .font(.caption)
+                    }
+                    if job.status == .paused || job.status == .interrupted {
+                        Button("Resume") { queue?.resume(id: job.id); runQueueInBackground() }
+                            .font(.caption)
+                    }
+                    if job.status == .queued || job.status == .running || job.status == .paused {
+                        Button("Cancel") { queue?.cancel(id: job.id); refreshQueue() }
+                            .font(.caption)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+
+    /// M4: lazily builds the shared queue (same store file as the CLI's
+    /// `seekzip queue`, so jobs enqueued here are visible there).
+    private func makeQueue() -> JobQueue? {
+        if let queue { return queue }
+        guard let engine = try? SevenZipEngine() else { return nil }
+        let created = JobQueue(engine: engine)
+        queue = created
+        return created
+    }
+
+    private func refreshQueue() {
+        queueJobs = queue?.jobs() ?? []
+    }
+
+    /// M4: runs queued jobs on a background queue and refreshes the
+    /// panel on the main queue when the runner drains the queue.
+    /// (`runAll` blocks, so it must never run on the main actor.)
+    private func runQueueInBackground() {
+        guard let queue else { return }
+        DispatchQueue.global(qos: .utility).async {
+            queue.runAll()
+            DispatchQueue.main.async { self.refreshQueue() }
+        }
     }
 
     /// The preview panel: text inline, everything else as metadata
@@ -240,22 +318,21 @@ struct BrowserView: View {
         }
     }
 
+    /// M4: Extract Selected now enqueues a job instead of extracting
+    /// inline — the queue runs it in the background, shows progress in
+    /// the queue panel, and survives an app relaunch.
     private func extractSelected() {
-        guard let archiveURL else { return }
+        guard let archiveURL, let queue = makeQueue() else { return }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.prompt = "Extract Here"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
         let entries = Array(selection)
-        Task {
-            do {
-                let engine = try SevenZipEngine()
-                try engine.extract(archive: archiveURL, entries: entries, to: dest)
-                status = "Extracted \(entries.count) entries to \(dest.path)"
-            } catch {
-                status = "Extract failed: \(error)"
-            }
-        }
+        queue.enqueue(JobDescriptor(kind: .extract, archive: archiveURL.path,
+                                    destination: dest.path, entries: entries))
+        refreshQueue()
+        status = "Queued extraction of \(entries.count) entries to \(dest.path)"
+        runQueueInBackground()
     }
 }
