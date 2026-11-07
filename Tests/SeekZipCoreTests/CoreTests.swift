@@ -2028,3 +2028,298 @@ final class EngineRouterTests: XCTestCase {
         XCTAssertTrue(summaries[0].capabilities.supportsEncrypted7z)
     }
 }
+
+// MARK: - M7: bundled engine lookup
+
+final class BundledEnginesTests: XCTestCase {
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir,
+                                                withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func makeExecutable(at url: URL) throws {
+        try "#!/bin/sh\nexit 0\n".write(to: url, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: url.path)
+    }
+
+    func testFindsHelperInHelpersSubdirectory() throws {
+        let root = try tempDir()
+        let helpers = root.appendingPathComponent("Contents/Resources/Helpers",
+                                                  isDirectory: true)
+        try FileManager.default.createDirectory(at: helpers,
+                                                withIntermediateDirectories: true)
+        let binary = helpers.appendingPathComponent("7zz")
+        try makeExecutable(at: binary)
+        XCTAssertEqual(BundledEngines.url(named: "7zz", bundleRoot: root), binary)
+    }
+
+    func testFindsHelperAtResourcesRoot() throws {
+        let root = try tempDir()
+        let resources = root.appendingPathComponent("Contents/Resources",
+                                                    isDirectory: true)
+        try FileManager.default.createDirectory(at: resources,
+                                                withIntermediateDirectories: true)
+        let binary = resources.appendingPathComponent("7zz")
+        try makeExecutable(at: binary)
+        XCTAssertEqual(BundledEngines.url(named: "7zz", bundleRoot: root), binary)
+    }
+
+    func testPrefersHelpersOverResourcesRoot() throws {
+        let root = try tempDir()
+        let resources = root.appendingPathComponent("Resources", isDirectory: true)
+        let helpers = resources.appendingPathComponent("Helpers", isDirectory: true)
+        try FileManager.default.createDirectory(at: helpers,
+                                                withIntermediateDirectories: true)
+        let inHelpers = helpers.appendingPathComponent("unar")
+        let atRoot = resources.appendingPathComponent("unar")
+        try makeExecutable(at: inHelpers)
+        try makeExecutable(at: atRoot)
+        XCTAssertEqual(BundledEngines.url(named: "unar", bundleRoot: root), inHelpers)
+    }
+
+    func testReturnsNilWhenMissingOrNotExecutable() throws {
+        let root = try tempDir()
+        XCTAssertNil(BundledEngines.url(named: "7zz", bundleRoot: root))
+        let helpers = root.appendingPathComponent("Resources/Helpers",
+                                                  isDirectory: true)
+        try FileManager.default.createDirectory(at: helpers,
+                                                withIntermediateDirectories: true)
+        let binary = helpers.appendingPathComponent("7zz")
+        try "not executable".write(to: binary, atomically: true, encoding: .utf8)
+        XCTAssertNil(BundledEngines.url(named: "7zz", bundleRoot: root))
+    }
+
+    func testContainingAppURLForExtensionBundle() throws {
+        let root = try tempDir()
+        let appex = root.appendingPathComponent(
+            "SeekZip.app/Contents/PlugIns/SeekZipFinderSync.appex",
+            isDirectory: true)
+        try FileManager.default.createDirectory(at: appex,
+                                                withIntermediateDirectories: true)
+        let bundle = Bundle(url: appex)
+        XCTAssertNotNil(bundle)
+        XCTAssertEqual(
+            BundledEngines.containingAppURL(from: bundle!),
+            root.appendingPathComponent("SeekZip.app"))
+        XCTAssertEqual(
+            BundledEngines.appBundleURL(from: bundle!),
+            root.appendingPathComponent("SeekZip.app"))
+    }
+
+    func testContainingAppURLIsNilOutsideAnExtension() throws {
+        let root = try tempDir()
+        let bundle = Bundle(url: root)
+        XCTAssertNotNil(bundle)
+        XCTAssertNil(BundledEngines.containingAppURL(from: bundle!))
+        // Compare paths: Bundle(url:) normalises the URL with a
+        // trailing slash, so URL equality would fail on that alone.
+        XCTAssertEqual(BundledEngines.appBundleURL(from: bundle!).path, root.path)
+    }
+}
+
+// MARK: - M7: preview of XAD-only archives (extract fallback)
+
+final class XADPreviewTests: XCTestCase {
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir,
+                                                withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Fake 7zz: mode "fail" exits 2 for every command; mode "stream"
+    /// lists one text entry and prints its content for `e -so`.
+    private func makeFake7zz(mode: String) throws -> URL {
+        let dir = try tempDir()
+        let script = dir.appendingPathComponent("fake7zz")
+        let text = """
+        #!/bin/sh
+        dir="$(dirname "$0")"
+        mode="$(cat "$dir/mode")"
+        if [ "$mode" = "fail" ]; then echo "ERROR: Can not open the file as archive" >&2; exit 2; fi
+        if [ "$1" = "e" ]; then printf 'hello\\nworld\\n'; exit 0; fi
+        printf '7-Zip (z) 24.09\\n\\nListing archive: x\\n\\n--\\nPath = x\\nType = zip\\nPhysical Size = 100\\n\\n----------\\nPath = hello.txt\\nFolder = -\\nSize = 11\\n\\n'
+        """
+        try text.write(to: script, atomically: true, encoding: .utf8)
+        try mode.write(to: dir.appendingPathComponent("mode"),
+                       atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        return script
+    }
+
+    /// Fake lsar/unar pair (same shape as XADEngineTests): lsar prints
+    /// the canned JSON, unar creates the manifest files. Manifest
+    /// content `__LONG__` writes 300 lines, `__NUL__` writes bytes
+    /// with an embedded NUL.
+    private func makeFakeXAD(listing: String, manifest: String,
+                             failUnar: Bool = false) throws -> (lsar: URL, unar: URL) {
+        let dir = try tempDir()
+        let lsar = dir.appendingPathComponent("lsar")
+        let unar = dir.appendingPathComponent("unar")
+        let lsarScript = """
+        #!/bin/sh
+        cat "$(dirname "$0")/lsar.json"
+        """
+        let unarScript = """
+        #!/bin/sh
+        dir="$(dirname "$0")"
+        if [ -f "$dir/unar-fail" ]; then echo "unar: extraction failed" >&2; exit 2; fi
+        out=""
+        for a in "$@"; do case "$a" in -o*) out="${a#-o}";; esac; done
+        while IFS='|' read -r path content; do
+          [ -z "$path" ] && continue
+          mkdir -p "$out/$(dirname "$path")"
+          if [ "$content" = "__LONG__" ]; then
+            i=1; while [ "$i" -le 300 ]; do echo "line $i"; i=$((i + 1)); done > "$out/$path"
+          elif [ "$content" = "__NUL__" ]; then
+            printf 'AB\\0CD' > "$out/$path"
+          else
+            printf '%s' "$content" > "$out/$path"
+          fi
+        done < "$dir/unar-manifest.txt"
+        """
+        try lsarScript.write(to: lsar, atomically: true, encoding: .utf8)
+        try unarScript.write(to: unar, atomically: true, encoding: .utf8)
+        for script in [lsar, unar] {
+            try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                                  ofItemAtPath: script.path)
+        }
+        try listing.write(to: dir.appendingPathComponent("lsar.json"),
+                          atomically: true, encoding: .utf8)
+        try manifest.write(to: dir.appendingPathComponent("unar-manifest.txt"),
+                           atomically: true, encoding: .utf8)
+        if failUnar {
+            try "".write(to: dir.appendingPathComponent("unar-fail"),
+                         atomically: true, encoding: .utf8)
+        }
+        return (lsar, unar)
+    }
+
+    private func lsarEntry(_ path: String, size: Int = 5) -> [String: Any] {
+        ["XADFileName": path, "XADFileSize": size, "XADCompressedSize": size,
+         "XADIsDirectory": false, "XADIsEncrypted": false]
+    }
+
+    private func lsarJSON(entries: [[String: Any]]) throws -> String {
+        let doc: [String: Any] = ["lsarFormatName": "StuffIt",
+                                  "lsarContents": entries]
+        return String(decoding: try JSONSerialization.data(withJSONObject: doc),
+                      as: UTF8.self)
+    }
+
+    private func router(sevenMode: String, entries: [[String: Any]],
+                        manifest: String, failUnar: Bool = false,
+                        archiveName: String = "a.sit") throws -> (EngineRouter, URL) {
+        let seven = try SevenZipEngine(
+            binaryPath: try makeFake7zz(mode: sevenMode).path)
+        let xadFake = try makeFakeXAD(listing: try lsarJSON(entries: entries),
+                                      manifest: manifest, failUnar: failUnar)
+        let xad = XADMasterEngine(lsarPath: xadFake.lsar.path,
+                                  unarPath: xadFake.unar.path)
+        let dir = try tempDir()
+        let archive = dir.appendingPathComponent(archiveName)
+        try "dummy archive bytes".write(to: archive, atomically: true, encoding: .utf8)
+        return (EngineRouter(engines: [seven, xad]), archive)
+    }
+
+    private func previewedEntry(router: EngineRouter,
+                                archive: URL) throws -> ArchiveEntry {
+        let info = try router.list(archive: archive)
+        return info.entries[0]
+    }
+
+    func testPreviewFallsBackToExtractForXADArchive() throws {
+        let (router, archive) = try router(
+            sevenMode: "fail",
+            entries: [lsarEntry("hello.txt", size: 5)],
+            manifest: "hello.txt|hello\n")
+        let entry = try previewedEntry(router: router, archive: archive)
+        let preview = try PreviewProvider(engine: router)
+            .preview(archive: archive, entry: entry)
+        XCTAssertEqual(preview.kind, .text)
+        XCTAssertEqual(preview.text, "hello")
+        XCTAssertEqual(preview.linesShown, 1)
+        XCTAssertFalse(preview.truncated)
+        XCTAssertTrue(preview.note?.contains("temporary") ?? false,
+                      "note: \(preview.note ?? "nil")")
+    }
+
+    func testPreviewFallbackTruncatesLongText() throws {
+        let (router, archive) = try router(
+            sevenMode: "fail",
+            entries: [lsarEntry("long.txt", size: 2400)],
+            manifest: "long.txt|__LONG__\n")
+        let entry = try previewedEntry(router: router, archive: archive)
+        let preview = try PreviewProvider(engine: router)
+            .preview(archive: archive, entry: entry)
+        XCTAssertEqual(preview.kind, .text)
+        XCTAssertEqual(preview.linesShown, PreviewProvider.maxPreviewLines)
+        XCTAssertTrue(preview.truncated)
+    }
+
+    func testPreviewFallbackDetectsBinary() throws {
+        let (router, archive) = try router(
+            sevenMode: "fail",
+            entries: [lsarEntry("bin.dat", size: 5)],
+            manifest: "bin.dat|__NUL__\n")
+        let entry = try previewedEntry(router: router, archive: archive)
+        let preview = try PreviewProvider(engine: router)
+            .preview(archive: archive, entry: entry)
+        XCTAssertEqual(preview.kind, .binary)
+        XCTAssertTrue(preview.quickLook)
+    }
+
+    func testPreviewFallbackThrowsOriginalErrorWhenExtractFails() throws {
+        let (router, archive) = try router(
+            sevenMode: "fail",
+            entries: [lsarEntry("hello.txt", size: 5)],
+            manifest: "hello.txt|hello\n", failUnar: true)
+        let entry = try previewedEntry(router: router, archive: archive)
+        XCTAssertThrowsError(
+            try PreviewProvider(engine: router)
+                .preview(archive: archive, entry: entry)
+        ) { error in
+            // The 7zz streaming failure, not the unar failure.
+            XCTAssertTrue(String(describing: error).contains("Can not open"),
+                          "\(error)")
+        }
+    }
+
+    func testPreviewFallbackBlocksTraversal() throws {
+        let (router, archive) = try router(
+            sevenMode: "fail",
+            entries: [lsarEntry("../evil.txt", size: 4)],
+            manifest: "../evil.txt|evil\n")
+        let entry = try previewedEntry(router: router, archive: archive)
+        XCTAssertThrowsError(
+            try PreviewProvider(engine: router)
+                .preview(archive: archive, entry: entry)
+        ) { error in
+            XCTAssertTrue(String(describing: error).contains("traversal"),
+                          "\(error)")
+        }
+    }
+
+    func testPreviewStillStreamsThroughRouter() throws {
+        let (router, archive) = try router(
+            sevenMode: "stream",
+            entries: [lsarEntry("hello.txt", size: 11)],
+            manifest: "hello.txt|hello\n", archiveName: "a.zip")
+        let entry = try previewedEntry(router: router, archive: archive)
+        let preview = try PreviewProvider(engine: router)
+            .preview(archive: archive, entry: entry)
+        XCTAssertEqual(preview.kind, .text)
+        XCTAssertEqual(preview.text, "hello\nworld")
+        XCTAssertEqual(preview.linesShown, 2)
+        XCTAssertFalse(preview.truncated)
+        XCTAssertNil(preview.note)
+    }
+}
