@@ -81,6 +81,33 @@ the next agent's context starts here.
   All edits go through the M4 safe path (temp copy + atomic rename +
   free-space precheck). Push policy from M5: work locally, push once
   per milestone (see `docs/TIMELOG.md`).
+- **M6 done**: XAD fallback engine behind a routing protocol —
+  `ArchiveEngine` (`ArchiveEngine.swift`: protocol, `EngineRouter`,
+  `EngineCapabilities` matrix, `EngineSummary`,
+  `UnavailableEngine`), `XADMasterEngine` (`lsar -j` JSON listing +
+  `unar -D -f -q -k skip` extraction, both as subprocesses — the ObjC
+  library is NOT linked). Routing: explicit selection (`--engine` /
+  MCP `engine`) → per-format override (GUI settings) → XAD-first for
+  sit/sitx/zoo/arc/cpt/dd/pit/ace/sea, else 7zz first → fallback on
+  failure / empty listing for a non-empty archive; never on password
+  errors, cancels, full disks or safety violations; encrypted 7z
+  stays on 7zz with a password. XAD is extraction-only (create/edit/
+  verify/streamEntry fail clearly); XAD `test` extracts to a temp dir
+  and discards it; XAD extract stages inside the destination and
+  moves into place only on success (no partial output on failure);
+  filename-encoding recovery is kept in `ArchiveEntry.filenameEncoding`
+  and passed to `unar -e`. Handling engine is stamped in
+  `ArchiveInfo.engine` / router `lastEngine` and surfaced in CLI
+  (`list`/`test`/`extract`, `seekzip engines`) and MCP (`list_engines`
+  tool). `listNested`/`withNestedArchive` moved to a protocol
+  extension (same behaviour, now routed). `JobQueue` takes any
+  `ArchiveEngine` (the router). 89 unit tests pass (22 new: 11 XAD
+  with fake lsar/unar, 11 router with fake 7zz + fake lsar/unar).
+  Real `lsar`/`unar` are NOT installed on the Linux VM and CI only
+  installs sevenzip — all XAD tests use fakes; a real-unar smoke test
+  needs the owner to add `brew install unar` to ci.yml (Muse cannot
+  edit workflows, 403). GUI engine settings + "handled by" label in
+  `Sources/SeekZipApp/` as code only (uncompiled until M7).
 - Engine decisions are settled: 7zz primary, XADMaster fallback in
   phase 2, libarchive deferred — rationale in `docs/REFERENCE.md`.
 
@@ -124,7 +151,7 @@ the next agent's context starts here.
    for creation, free-space precheck.
 5. **M5 — Create/edit polish** (done): add/remove/rename entries,
    conversion, checksums UI, Keychain passwords.
-6. **M6 — XAD fallback engine** behind the routing protocol.
+6. **M6 — XAD fallback engine** behind the routing protocol (done).
 7. **M7 — Extensions & packaging**: Finder + Quick Look extensions,
    bundled signed 7zz, notarised release, Homebrew cask.
 
@@ -148,10 +175,18 @@ versions disagree.
   partially extracted entries — re-running overwrites them with `-y`).
 - GUI is a skeleton: preview panel + nested navigation are wired in
   code (M3), queue panel wired in code (M4), edit row + CRC column
-  wired in code (M5), all uncompiled until the M7 Xcode project; no
-  tabs or drag-out yet.
+  wired in code (M5), engine settings + "handled by" label wired in
+  code (M6), all uncompiled until the M7 Xcode project; no tabs or
+  drag-out yet.
 - Passwords passed to `7zz` via `-p` are visible in the local process
   list (accepted, documented risk).
+- XAD engine notes (M6): `lsar`/`unar` come from The Unarchiver's
+  command-line tools (`brew install unar`); without them the engine
+  reports unavailable and the router skips it. XAD lists/extracts/
+  tests only — no creation, editing, verification or entry streaming;
+  preview of an XAD-only archive fails clearly (streaming is 7zz-only).
+  XAD `test` is a full temp extraction. CI has no real-unar smoke test
+  yet (needs the owner to add `brew install unar` to ci.yml).
 
 ## 8. Open questions for the owner
 
