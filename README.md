@@ -62,7 +62,14 @@ wiring is code only until the M7 Xcode project. M4 done: persistent job
 queue — batch extract/create/test with pause/resume/cancel, temp-name +
 atomic-rename creation, free-space precheck, and clean Ctrl-C handling —
 via `seekzip queue` and MCP queue tools. The GUI queue panel is code
-only until the M7 Xcode project.
+only until the M7 Xcode project. M5 done: create/edit polish — add,
+remove and rename entries in ZIP/7z/TAR archives (temp copy + atomic
+rename, so a failed edit never corrupts the original), conversion
+(ZIP ↔ 7z ↔ TAR; RAR cannot be created), per-entry CRC-32/SHA-256
+checksums with a `verify` command, and passwords stored in the macOS
+Keychain (`SEEKZIP_PASSWORD` env var as the other channel, never a
+`-p` argument). The GUI edit panel and CRC column are code only until
+the M7 Xcode project.
 
 ## Build (on a Mac)
 
@@ -88,8 +95,44 @@ Jobs run one at a time and are stored in
 writes to a staging directory first and renames into place on success,
 so a cancelled or failed create leaves no half-written file. Extracts
 and creates check free space first and fail fast when the destination
-volume cannot hold the result. Passwords are kept in memory only and
-are never written to the queue file.
+volume cannot hold the result. Passwords are never written to the queue
+file — they come from `SEEKZIP_PASSWORD` or the Keychain (see below).
+
+## Edit, convert, verify
+
+```sh
+seekzip add archive.zip newfile.txt --into docs   # add entries (ZIP/7z/TAR)
+seekzip remove archive.zip old.txt                # remove entries
+seekzip rename archive.zip old.txt new.txt        # rename (ZIP/7z only)
+seekzip convert archive.zip archive.7z            # convert ZIP → 7z (also 7z → ZIP, TAR → 7z)
+seekzip verify archive.zip [--sha256]             # re-check every entry's CRC (and SHA-256)
+seekzip checksums archive.zip                     # CRC-32 of every entry, from the listing
+```
+
+Every edit works on a temp copy in the same folder and only replaces the
+original with an atomic rename after the edited copy lists cleanly — a
+failed edit leaves the original byte-for-byte untouched. Conversion
+extracts to a temp dir and re-creates the archive; entry names and
+contents survive, and converting *to* RAR fails with a clear error (no
+third-party tool can create RAR). `verify` streams each entry, hashes it
+(CRC-32, plus SHA-256 with `--sha256`) and compares it with the listing
+CRC; a bad entry is reported and the rest are still checked.
+
+## Passwords
+
+```sh
+SEEKZIP_PASSWORD=hunter2 seekzip list secret.zip  # env var (never a -p argument)
+seekzip password store secret.zip                 # save in the macOS Keychain (prompts, twice)
+seekzip password forget secret.zip                # forget the stored password
+```
+
+A password is never accepted as a command-line argument (it would show
+in the process list). The CLI takes it from `SEEKZIP_PASSWORD` or from
+the stored password — macOS Keychain (`com.seekzip.passwords`) in the
+app and on the CLI, an in-memory store only on Linux test runs. An
+explicit password always wins over the stored one. MCP tools take the
+same `password` field (`add_entries`, `remove_entries`, `rename_entries`,
+`convert_archive`, `verify_archive`).
 
 RAR archives can be extracted but not created — RAR creation is proprietary
 (this is true of every macOS archiver).
