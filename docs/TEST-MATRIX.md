@@ -28,7 +28,7 @@ runner, never committed.
 - ENC-02 ZIP AES-256; 7z AES-256 with encrypted headers (`-mhe=on`)
 - ENC-03 Wrong password: clean error, no partial extraction, exit code 5
 - ENC-04 Unicode password (Vietnamese diacritics, emoji)
-- ENC-05 Password from Keychain; wrong stored password falls back to prompt
+- ENC-05 Password from Keychain; wrong stored password falls back to prompt — CLI `password store` + `SEEKZIP_PASSWORD`, M5
 
 ## Split volumes (SPL)
 - SPL-01 ZIP split (.z01…), 7z volumes (.7z.001…), RAR parts (part1.rar…)
@@ -38,9 +38,26 @@ runner, never committed.
 ## Corruption (COR)
 - COR-01 Truncated archive (50%, 99%): header error, no crash
 - COR-02 Bit-flipped entry data: CRC failure reported per entry; other
-  entries still extract
+  entries still extract — `seekzip verify` reports it per entry (M5)
 - COR-03 Corrupted central directory; salvage mode extracts what's readable
 - COR-04 Not an archive at all (random bytes, empty file, directory as input)
+
+## Edit & conversion (EDT)
+- EDT-01 Add entries to ZIP and 7z (with `--into` prefix); the new
+  entry appears with the right CRC
+- EDT-02 Remove entries from ZIP, 7z and TAR; removing a missing entry
+  fails before the archive is touched
+- EDT-03 Rename entries in ZIP and 7z; renaming to an existing name
+  fails; TAR rename fails with a clear error
+- EDT-04 Add/remove to RAR fails with a clear error (extraction-only
+  format)
+- EDT-05 Failed edit (7zz exits non-zero) leaves the original
+  byte-for-byte untouched, no temp files left
+- EDT-06 Conversion ZIP → 7z → ZIP round-trip: entry names and CRCs
+  survive; converting TO RAR fails clearly
+- EDT-07 `verify` re-checks every entry's CRC (plus SHA-256 with
+  `--sha256`); a corrupted entry is reported as a mismatch and the
+  rest are still checked
 
 ## Nesting & structure (NES)
 - NES-01 Archive inside archive inside archive (3 levels) opened in place
