@@ -219,88 +219,6 @@ final class NestedPreviewTests: XCTestCase {
         XCTAssertEqual(String(decoding: bytes, as: UTF8.self), "xin chào\n")
     }
 
-    /// TEMPORARY DIAGNOSTIC for CI #128: `verify` still reports
-    /// `src/tiếng việt.txt` as CRC 00000000 on macOS even after the
-    /// NFC/NFD retry, while the regression test above passes there.
-    /// Prints the exact bytes of the on-disk name, the listed name,
-    /// and what direct `7zz e -so` returns for each candidate form,
-    /// then fails on purpose so the data lands in the CI log. REMOVE
-    /// once the real cause is known.
-    func testDiagnoseVietnameseFilename() throws {
-        guard let engine = try? SevenZipEngine() else {
-            throw XCTSkip("real 7zz not installed")
-        }
-        func hex(_ s: String) -> String {
-            s.utf8.map { String(format: "%02x", $0) }.joined(separator: " ")
-        }
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let src = dir.appendingPathComponent("src")
-        try FileManager.default.createDirectory(at: src, withIntermediateDirectories: true)
-        let name = "tiếng việt.txt".precomposedStringWithCanonicalMapping
-        // Mirror generate-matrix.sh: create the file with /bin/sh.
-        let sh = Process()
-        sh.executableURL = URL(fileURLWithPath: "/bin/sh")
-        sh.arguments = ["-c", "printf 'xin chào, đây là file tiếng Việt\\n' > \"src/\(name)\""]
-        sh.currentDirectoryURL = dir
-        sh.standardOutput = FileHandle.nullDevice
-        sh.standardError = FileHandle.nullDevice
-        try sh.run()
-        sh.waitUntilExit()
-        XCTAssertEqual(sh.terminationStatus, 0, "fixture file creation failed")
-        let zip = Process()
-        zip.executableURL = engine.binaryURL
-        zip.currentDirectoryURL = dir
-        zip.arguments = ["a", "-tzip", "plain.zip", "src"]
-        zip.standardOutput = FileHandle.nullDevice
-        zip.standardError = FileHandle.nullDevice
-        try zip.run()
-        zip.waitUntilExit()
-        XCTAssertEqual(zip.terminationStatus, 0, "fixture zip creation failed")
-
-        var lines: [String] = []
-        for n in try FileManager.default.contentsOfDirectory(atPath: src.path) {
-            lines.append("on-disk: \(hex(n))")
-        }
-        let archive = dir.appendingPathComponent("plain.zip")
-        let info = try engine.list(archive: archive)
-        for e in info.entries {
-            lines.append("listed: \(hex(e.path)) crc=\(e.crc ?? "?")")
-        }
-        let listed = info.entries.first { $0.path.contains("vit") || $0.path.contains("ti") }?.path
-            ?? "src/" + name
-        lines.append("listed-used: \(hex(listed))")
-        for (label, candidate) in [
-            ("listed", listed),
-            ("NFC", "src/" + name),
-            ("NFD", "src/" + name.decomposedStringWithCanonicalMapping),
-        ] {
-            let p = Process()
-            p.executableURL = engine.binaryURL
-            p.arguments = ["e", "-so", "-y", "-sccUTF-8", archive.path, candidate]
-            let out = Pipe()
-            p.standardOutput = out
-            let err = Pipe()
-            p.standardError = err
-            try p.run()
-            let data = out.fileHandleForReading.readDataToEndOfFile()
-            p.waitUntilExit()
-            let errText = String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-                .replacingOccurrences(of: "\n", with: "\\n")
-            lines.append("e-so \(label): exit=\(p.terminationStatus) bytes=\(data.count) err=[\(errText)]")
-        }
-        var bytes = Data()
-        let completed = try engine.streamEntry(archive: archive, entry: listed) { chunk in
-            bytes.append(chunk)
-            return true
-        }
-        lines.append("streamEntry(listed): completed=\(completed) bytes=\(bytes.count)")
-        for line in lines { print("DIAG " + line) }
-        XCTFail("DIAG\n" + lines.joined(separator: "\n"))
-    }
-
     // MARK: Text preview
 
     func testPreviewText() throws {
@@ -1192,6 +1110,19 @@ final class EditTests: XCTestCase {
         def non_flags(args):
             return [a for a in args if not a.startswith("-")]
 
+        def expand_listfiles(args):
+            # Real 7zz reads @listfile arguments (one entry per line);
+            # the engine passes entry names that way so their bytes
+            # reach 7zz verbatim on macOS.
+            out = []
+            for a in args:
+                if a.startswith("@"):
+                    with open(a[1:]) as f:
+                        out.extend([line.rstrip("\\n") for line in f if line.strip() != ""])
+                else:
+                    out.append(a)
+            return out
+
         def add_entries(archive, names):
             if FAIL_ADD:
                 sys.stderr.write("simulated add failure" + NL)
@@ -1288,7 +1219,7 @@ final class EditTests: XCTestCase {
                 rest = non_flags(args[1:])
                 rename_entries(rest[0], rest[1:])
             elif cmd == "e":
-                rest = non_flags(args[1:])
+                rest = expand_listfiles(non_flags(args[1:]))
                 stream_entry(rest[0], rest[1])
             elif cmd == "x":
                 dest = ""
@@ -1300,6 +1231,7 @@ final class EditTests: XCTestCase {
                         continue
                     else:
                         rest.append(a)
+                rest = expand_listfiles(rest)
                 extract(rest[0], dest, rest[1:])
             else:
                 sys.exit(2)
