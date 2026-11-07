@@ -35,7 +35,9 @@ One engine, three frontends:
             └──────┬──────┘
                    │  Process (streaming, never loads archives into RAM)
             ┌──────▼──────┐
-            │  7zz (7-Zip)│  bundled official macOS ARM binary
+            │  7zz (7-Zip)│  bundled official macOS ARM binary (primary)
+            ├─────────────┤
+            │ lsar / unar │  XADMaster fallback (legacy formats, M6)
             └─────────────┘
 ```
 
@@ -69,7 +71,13 @@ rename, so a failed edit never corrupts the original), conversion
 checksums with a `verify` command, and passwords stored in the macOS
 Keychain (`SEEKZIP_PASSWORD` env var as the other channel, never a
 `-p` argument). The GUI edit panel and CRC column are code only until
-the M7 Xcode project.
+the M7 Xcode project. M6 done: XAD fallback engine behind a routing protocol — `ArchiveEngine` with a
+capability matrix, `EngineRouter` (7zz first, XAD fallback on failure/empty listing, XAD-first for legacy
+formats like StuffIt/Zoo/ARC; encrypted 7z always stays on 7zz), XAD list/extract/test via `lsar`/`unar`
+(extraction-only, staged extract so a failed run leaves no partial output, filename-encoding recovery kept
+in entry metadata), CLI `--engine auto|7zz|xad` + `seekzip engines`, MCP `engine` argument + `list_engines`,
+GUI engine settings (code only until the M7 Xcode project). `seekzip list/test/extract` report which engine
+handled the archive.
 
 ## Build (on a Mac)
 
