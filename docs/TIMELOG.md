@@ -6,7 +6,7 @@ takes and how long a developer building it themselves would need.
 Updated after every milestone. Agent times come from the runtime
 (start/completed timestamps); approval times come from permissions.history.
 
-## Measured so far (as of 07:30 on 2026-11-07)
+## Measured so far (as of 07:46 on 2026-11-07)
 
 | Milestone | Start → done (Vietnam time) | Wall time | Notes |
 |---|---|---|---|
@@ -14,7 +14,7 @@ Updated after every milestone. Agent times come from the runtime
 | M2 — Streaming listing | 05:00 → 06:28 | ~1h28m | 14 commits. 2 pushes stalled because approval cards expired and had to be retried. |
 | M3 — Preview + nested | 06:28 → 07:03 | ~35m | 18 commits. |
 | M4 — Queue | 07:05 → 07:22 | ~17m | 12 commits. Pushed the old way (one file at a time, approvals spread out). |
-| M5 — Create/edit polish | 07:22 → 07:37 local work done; batch push + CI check after | ~15m local work | 14 files in one batch push (2 new: Checksums.swift, PasswordStore.swift). Local: swift test 67/67 green, swift build green. Push/approval/CI times added after CI goes green. |
+| M5 — Create/edit polish | 07:22 → 07:46 | ~24m | 14 files in one batch push (2 new: Checksums.swift, PasswordStore.swift). Local work ~15m (swift test 67/67 green, swift build green); batch push 07:39–07:43, 14 approval cards, all approved in seconds, no expiries; CI run 42319888603 green 07:44 (build + tests + fixtures + smoke, all steps). |
 
 ## Approval waiting time (measured sample, latest history page, 20 approvals)
 
@@ -23,8 +23,12 @@ Updated after every milestone. Agent times come from the runtime
 - Total ~19 minutes of approval waiting across those 20 approvals.
 - M2 alone had 2 approval cards expire (cards expire after 30 minutes).
 - Every commit pushed to GitHub needs its own approval card — M2 14 commits,
-  M3 18 commits, M4 12 commits — so the waiting adds up fast. This is the
-  biggest cost outside of coding.
+  M3 18 commits, M4 12 commits, M5 14 commits — so the waiting adds up fast.
+  This is the biggest cost outside of coding.
+- M5 proved the batch policy works: 14 approval cards bunched at the
+  end (07:39–07:43), every one approved in seconds, none expired —
+  versus M2, where 2 cards expired mid-milestone. The agent was never
+  blocked mid-work.
 
 ## CI time
 
