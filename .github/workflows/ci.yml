@@ -18,9 +18,7 @@ jobs:
         run: swift build
 
       - name: Build Xcode project (app + extensions, unsigned)
-        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip \
-          -configuration Debug build \CODE_SIGNING_ALLOWED=NO
-
+        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Debug build CODE_SIGNING_ALLOWED=NO
 
       - name: Unit tests
         run: swift test
