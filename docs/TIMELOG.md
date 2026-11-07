@@ -6,7 +6,7 @@ takes and how long a developer building it themselves would need.
 Updated after every milestone. Agent times come from the runtime
 (start/completed timestamps); approval times come from permissions.history.
 
-## Measured so far (as of 08:11 on 2026-11-07)
+## Measured so far (as of 08:49 on 2026-11-07)
 
 | Milestone | Start → done (Vietnam time) | Wall time | Notes |
 |---|---|---|---|
@@ -16,6 +16,16 @@ Updated after every milestone. Agent times come from the runtime
 | M4 — Queue | 07:05 → 07:22 | ~17m | 12 commits. Pushed the old way (one file at a time, approvals spread out). |
 | M5 — Create/edit polish | 07:22 → 07:46 | ~24m | 14 files in one batch push (2 new: Checksums.swift, PasswordStore.swift). Local work ~15m (swift test 67/67 green, swift build green); batch push 07:39–07:43, 14 approval cards, all approved in seconds, no expiries; CI run 42319888603 green 07:44 (build + tests + fixtures + smoke, all steps). |
 | M6 — XAD fallback engine | 07:54 → 08:28 | ~17m local, ~14m push, ~3m CI | 16 files in one batch push (2 new: ArchiveEngine.swift, XADMasterEngine.swift) + 1 TIMELOG finalize commit. Local work 07:54–08:11 (~17m: protocol + router + XAD engine + CLI/MCP/GUI wiring, swift test 89/89 green (22 new), CLI + MCP smoke-tested end-to-end with fake 7zz/lsar/unar — real binaries not on the Linux VM). Batch push 08:11–08:25, 16 approval cards, no expiries; first card waited ~11 min (owner away), the rest approved in seconds. CI run 42324029579 on head 128c5e7 green (build + tests + fixtures + smoke, all steps). |
+| M7 — Extensions & packaging | 08:33 → 08:49 local done, push + CI to follow | local ~16m | Xcode project (app + Finder Sync + Quick Look, SeekZipCore static-lib target), bundled-engine lookup + App Group shared settings, XAD preview fallback (PreviewProvider takes the router), package-engines.sh (7-Zip 26.05 SHA-256 verified by download) + release.sh + Homebrew formula/cask + docs/RELEASE.md. swift test 101/101 green (10 new: 6 XAD preview, 4 bundled-engine lookup), CLI smoke-tested; pbxproj validated by scripts/validate-xcodeproj.py (95 objects, all checks pass). Xcode project NEVER built — needs a Mac with full Xcode. Push/CI times finalized after the batch push. |
+
+## Whole v1 total (M1–M7)
+
+| | Wall time |
+|---|---|
+| Milestone wall times summed (M1 3h40m + M2 1h28m + M3 35m + M4 17m + M5 24m + M6 ~34m + M7 ~16m local, push/CI to follow) | ~7h15m. |
+| Elapsed, first message (01:16) → M7 local done (08:49) | 7h33m — includes gaps between milestones, owner replies and approval waiting. |
+| Hands-on local work, M5–M7 (measured split) | 15m + 17m + 16m = 48m of pure coding/testing; the batch-push + CI tail adds ~15–20m per milestone. M1–M4 predate the split measurement. |
+| Developer estimate for the whole v1 (from the estimate section below) | 3–6 focused working days — unchanged. |
 
 ## Approval waiting time (measured sample, latest history page, 20 approvals)
 
