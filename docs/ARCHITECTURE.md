@@ -20,11 +20,13 @@ seekzip-mcp (MCP) ────┘        │
 | `SeekZipCore/ArchiveEntry.swift` | `ArchiveEntry`, `ArchiveInfo` value models (Codable — the same shapes the CLI prints as JSON and MCP returns) |
 | `SeekZipCore/ListingParser.swift` | Parses `7zz l -slt` technical listings into models |
 | `SeekZipCore/EntryPathSafety.swift` | Zip-slip / absolute-path / symlink policy, zip-bomb heuristic |
-| `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create, nested listing, entry streaming |
+| `SeekZipCore/SevenZipEngine.swift` | Subprocess wrapper: list, test, extract (selective), create, nested listing, entry streaming; cancellable/pausable runs with `-bsp1` progress (M4), temp-staged atomic creation (M4) |
 | `SeekZipCore/PreviewProvider.swift` | Entry previews (M3): text streams in capped at 64 KB / 200 lines, images/PDF/binary defer to Quick Look |
-| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping |
-| `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core |
-| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation |
+| `SeekZipCore/JobControl.swift` | Pause (SIGSTOP) / resume (SIGCONT) / cancel (SIGTERM) handle for a running `7zz` process, plus `JobProgress` (M4) |
+| `SeekZipCore/JobQueue.swift` | Persistent sequential job queue (M4): `JobDescriptor`/`JobRecord`, atomic JSON store, `DiskSpace` free-space precheck |
+| `SeekZipCLI/main.swift` | Argument handling, human/JSON output, exit-code mapping, `queue` subcommands, Ctrl-C via DispatchSource (M4) |
+| `SeekZipMCP/main.swift` | MCP stdio JSON-RPC server; tool schemas; delegates to Core; `queue_*` tools on a background runner (M4) |
+| `SeekZipApp/SeekZipApp.swift` | SwiftUI browser: open, filter, select, extract, preview (Space), nested navigation, queue panel (M4) |
 
 ## 3. Data flow — listing an archive
 
@@ -55,9 +57,29 @@ seekzip-mcp (MCP) ────┘        │
    `..` traversal and (by default) symlinks are violations.
 2. `ArchiveInfo.expansionRatio` feeds the zip-bomb warning; the GUI/CLI
    surface it before extracting.
-3. Only then does Core run `7zz x -y` with the explicit entry list.
+3. `DiskSpace.require` fails fast when the destination volume cannot
+   hold the uncompressed listing (M4).
+4. Only then does Core run `7zz x -y` with the explicit entry list.
    7zz streams bytes disk-to-disk; archive content never enters this
-   process's memory.
+   process's memory. With a progress callback the run adds `-bsp1` and
+   reports percent figures; a `JobControl` can pause (SIGSTOP) or
+   cancel (SIGTERM) it mid-run (M4).
+
+## 4b. Data flow — queue (M4)
+
+1. A frontend enqueues a `JobDescriptor` (extract/create/test) into
+   `JobQueue`; the record is persisted immediately to
+   `~/Library/Application Support/SeekZip/queue.json` (atomic write).
+   Passwords are held in memory only and never persisted.
+2. `runAll` takes jobs in enqueue order, one at a time, and drives the
+   engine with a per-job `JobControl` (progress via `-bsp1`, pause via
+   SIGSTOP, cancel via SIGTERM). Every status change is persisted.
+3. A job that was `.running` when the process died loads as
+   `.interrupted` — it never restarts silently. A `.paused` job stays
+   paused; resuming it after a relaunch restarts that job from the
+   beginning (a suspended process cannot survive process death).
+4. Creation goes through temp staging + atomic rename, so cancel and
+   failure leave no half-written final file (PERF-05).
 4. CLI maps a safety violation to exit code 4, engine failure to 3.
 
 ## 5. Engine routing (phase 2)
@@ -78,8 +100,11 @@ decryption, no multi-volume).
 stderr.
 
 **MCP tools**: `list_archive`, `test_archive`, `extract_entries`,
-`create_archive` — schemas in `SeekZipMCP/main.swift`. The server speaks
-newline-delimited JSON-RPC 2.0 on stdio (MCP `2024-11-05`).
+`create_archive`, `queue_enqueue`, `queue_list`, `queue_pause`,
+`queue_resume`, `queue_cancel` — schemas in `SeekZipMCP/main.swift`.
+The server speaks newline-delimited JSON-RPC 2.0 on stdio (MCP
+`2024-11-05`). Queue tools share the CLI's persistent store and run
+jobs on a background thread (M4).
 
 ## 7. Invariants (do not break)
 
@@ -92,8 +117,11 @@ newline-delimited JSON-RPC 2.0 on stdio (MCP `2024-11-05`).
 3. **No interactive subprocesses**: stdin is always `/dev/null`; every
    prompt-prone command carries `-y` and an explicit `-p` when needed.
 4. **Atomic results**: operations write to temp names and rename on
-   success (extraction destinations excepted in v0.1; creation adopts
-   this with the queue milestone).
+   success. Creation writes into a staging directory in the
+   destination directory and POSIX-renames into place (M4); a
+   cancelled/failed create leaves no half-written file. Extraction
+   destinations are excepted (entries land directly; a cancelled
+   extract may leave partial entries, re-running overwrites them).
 5. **Clean-room**: behaviour and public contracts may be learned from
    reference projects; code may not be copied (MacPacker is GPL-3.0).
 
