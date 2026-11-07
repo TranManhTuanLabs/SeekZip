@@ -22,11 +22,12 @@ let sha256Flag = rawArgs.contains("--sha256")
 let envPassword = ProcessInfo.processInfo.environment["SEEKZIP_PASSWORD"]
     .flatMap { $0.isEmpty ? nil : $0 }
 
-/// Parses flags out of the arguments. `--format` and `--into` take a
-/// value; `--json`, `--stream` and `--sha256` do not. Everything else
-/// is positional, in order.
+/// Parses flags out of the arguments. `--format`, `--into` and
+/// `--engine` take a value; `--json`, `--stream` and `--sha256` do
+/// not. Everything else is positional, in order.
 var formatFlag: String?
 var intoFlag: String?
+var engineFlag: String?
 var positional: [String] = []
 do {
     var i = rawArgs.startIndex
@@ -37,6 +38,9 @@ do {
             i = rawArgs.index(after: rawArgs.index(after: i))
         } else if a == "--into", rawArgs.index(after: i) < rawArgs.endIndex {
             intoFlag = rawArgs[rawArgs.index(after: i)]
+            i = rawArgs.index(after: rawArgs.index(after: i))
+        } else if a == "--engine", rawArgs.index(after: i) < rawArgs.endIndex {
+            engineFlag = rawArgs[rawArgs.index(after: i)]
             i = rawArgs.index(after: rawArgs.index(after: i))
         } else if a.hasPrefix("--") {
             i = rawArgs.index(after: i)
@@ -91,10 +95,12 @@ func fail(_ code: Int32, _ message: String) -> Never {
 }
 
 func printUsage() {
-    print("usage: seekzip <list|test|extract|create|preview|queue|add|remove|rename|convert|verify|checksums|password> [--json|--stream] <archive> [args…]")
+    print("usage: seekzip <list|test|extract|create|preview|queue|add|remove|rename|convert|verify|checksums|password|engines> [--json|--stream] [--engine auto|7zz|xad] <archive> [args…]")
     print("  list <archive> [nested-entry…]   list an archive, or an archive inside it")
     print("  preview <archive> <entry>        preview one entry (text inline, else Quick Look)")
     print("  preview <archive> <a!/b!/entry>  preview an entry inside nested archives")
+    print("  engines [--json]                 list the engines and which formats each covers")
+    print("  --engine auto|7zz|xad            engine for list/test/extract (default auto: 7zz first, XAD fallback)")
     print("  queue add extract <archive> <dest> [entries…]")
     print("  queue add create <archive> <sources…> [--format zip|7z]")
     print("  queue add test <archive>         enqueue a job (it does not run yet)")
@@ -124,7 +130,17 @@ func printListing(_ info: ArchiveInfo) {
         for e in info.entries {
             print("\(e.isDirectory ? "d" : "-") \(String(format: "%12d", e.size))  \(e.path)")
         }
-        print("\(info.entries.count) entries, \(info.totalUncompressed) bytes uncompressed")
+        print("\(info.entries.count) entries, \(info.totalUncompressed) bytes uncompressed (engine: \(info.engine ?? "?"))")
+    }
+}
+
+func printEngines(_ summaries: [EngineSummary]) {
+    if json { emitJSON(summaries); return }
+    for s in summaries {
+        print("\(s.id) — \(s.displayName) \(s.available ? "available" : "NOT INSTALLED")\(s.binaryPath.map { " (\($0))" } ?? "")")
+        print("  reads: \(s.capabilities.readFormats.joined(separator: ", "))")
+        print("  writes: \(s.capabilities.writeFormats.isEmpty ? "none (extraction-only)" : s.capabilities.writeFormats.joined(separator: ", "))")
+        for note in s.capabilities.notes { print("  \(note)") }
     }
 }
 
@@ -159,8 +175,27 @@ func printJobs(_ jobs: [JobRecord]) {
 }
 
 do {
-    let engine = try SevenZipEngine()
+    // M6: the router owns both engines. `--engine` selects one
+    // operation's engine (auto = 7zz first, XAD fallback); preview
+    // keeps the raw 7zz engine (entry streaming is 7zz-only).
+    // 7zz is optional here so `seekzip engines` can run (and report
+    // it missing) on a machine without 7zz; commands that need it
+    // fail clearly when it is absent.
+    let sevenZip: any ArchiveEngine = (try? SevenZipEngine())
+        ?? UnavailableEngine(id: .sevenZip,
+                             capabilities: SevenZipEngine.engineCapabilities)
+    let xad = XADMasterEngine()
+    let router = EngineRouter(engines: [sevenZip, xad])
+    if let engineFlag {
+        guard let selection = EngineSelection(rawValue: engineFlag) else {
+            fail(2, "engine must be auto, 7zz or xad")
+        }
+        router.defaultSelection = selection
+    }
+    let engine = router
     switch command {
+    case "engines":
+        printEngines(router.summaries())
     case "list":
         guard positional.count >= 2 else { fail(2, "list needs an archive path") }
         let url = URL(fileURLWithPath: positional[1])
@@ -175,7 +210,7 @@ do {
                 // by the time listNested returns, so streaming here is
                 // JSON lines from the collected listing, not incremental.
                 for entry in info.entries { emitJSON(entry) }
-                FileHandle.standardError.write("seekzip: \(info.entries.count) entries, \(info.totalUncompressed) bytes uncompressed\n".data(using: .utf8)!)
+                FileHandle.standardError.write("seekzip: \(info.entries.count) entries, \(info.totalUncompressed) bytes uncompressed (engine: \(info.engine ?? "?"))\n".data(using: .utf8)!)
             } else {
                 printListing(info)
             }
@@ -192,7 +227,7 @@ do {
                 emitJSON(entry)
                 return true
             }
-            FileHandle.standardError.write("seekzip: \(info.entries.count) entries, \(info.totalUncompressed) bytes uncompressed\n".data(using: .utf8)!)
+            FileHandle.standardError.write("seekzip: \(info.entries.count) entries, \(info.totalUncompressed) bytes uncompressed (engine: \(info.engine ?? "?"))\n".data(using: .utf8)!)
             break
         }
         let info = try engine.list(archive: url, password: envPassword,
@@ -200,9 +235,12 @@ do {
         printListing(info)
     case "preview":
         guard positional.count >= 3 else { fail(2, "preview needs <archive> <entry>") }
+        guard let realSevenZip = sevenZip as? SevenZipEngine else {
+            fail(3, "7zz engine binary not found")
+        }
         let archiveURL = URL(fileURLWithPath: positional[1])
         let entryPath = positional[2]
-        let provider = PreviewProvider(engine: engine)
+        let provider = PreviewProvider(engine: realSevenZip)
         if entryPath.contains("!/") {
             // M3 nested preview: "inner.zip!/deep.zip!/file.txt".
             let parts = entryPath.split(separator: "!/").map(String.init)
@@ -230,7 +268,8 @@ do {
         guard positional.count >= 2 else { fail(2, "test needs an archive path") }
         try engine.test(archive: URL(fileURLWithPath: positional[1]),
                         password: envPassword, control: directControl)
-        print(json ? "{\"ok\":true}" : "Everything is Ok")
+        let testEngine = router.lastEngine?.rawValue ?? "?"
+        print(json ? "{\"ok\":true,\"engine\":\"\(testEngine)\"}" : "Everything is Ok (engine: \(testEngine))")
     case "extract":
         guard positional.count >= 3 else { fail(2, "extract needs <archive> <destination> [entry…]") }
         let entries = positional.count > 3 ? Array(positional[3...]) : nil
@@ -238,7 +277,8 @@ do {
                            entries: entries,
                            to: URL(fileURLWithPath: positional[2]),
                            password: envPassword, control: directControl)
-        print(json ? "{\"ok\":true}" : "Extracted")
+        let extractEngine = router.lastEngine?.rawValue ?? "?"
+        print(json ? "{\"ok\":true,\"engine\":\"\(extractEngine)\"}" : "Extracted (engine: \(extractEngine))")
     case "create":
         guard positional.count >= 3 else { fail(2, "create needs <archive> <source…>") }
         try engine.create(archive: URL(fileURLWithPath: positional[1]),
