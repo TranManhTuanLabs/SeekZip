@@ -60,6 +60,27 @@ the next agent's context starts here.
   queue panel in `Sources/SeekZipApp/` as code only (uncompiled until
   M7). 44 unit tests pass (14 new). Passwords are kept in memory only
   and never written to the queue file.
+- **M5 done**: create/edit polish — `SevenZipEngine.addEntries` /
+  `removeEntries` / `renameEntries` (ZIP/7z/TAR add+delete via `7zz a/d`,
+  rename via `7zz rn` for ZIP/7z only; TAR rename fails clearly with a
+  remove+add hint), `convert` (extract to temp dir + `create`; targets
+  ZIP/7z/TAR, TO rar fails clearly), `entryChecksums` (CRC-32 from the
+  listing) + `verify` (streams each entry, CRC-32 + optional SHA-256,
+  per-entry ok/mismatch/unknown/error, never stops at the first bad
+  entry), `Checksums.swift` (pure-Swift CRC-32 + SHA-256 with streaming
+  accumulators), `PasswordStore.swift` (`PasswordStoring` protocol;
+  Keychain on macOS via Security framework, service
+  `com.seekzip.passwords`; in-memory fallback on Linux, tests only),
+  CLI `add|remove|rename|convert|verify|checksums|password store|forget`
+  + `SEEKZIP_PASSWORD` (never a `-p` argument; explicit password wins
+  over the stored one), MCP `add_entries` / `remove_entries` /
+  `rename_entries` / `convert_archive` / `verify_archive`, GUI edit row
+  + CRC column in `Sources/SeekZipApp/` as code only (uncompiled until
+  M7). 67 unit tests pass (23 new: 15 edit/convert/verify against a
+  stateful scripted 7zz, 4 checksum vectors, 4 password-store tests).
+  All edits go through the M4 safe path (temp copy + atomic rename +
+  free-space precheck). Push policy from M5: work locally, push once
+  per milestone (see `docs/TIMELOG.md`).
 - Engine decisions are settled: 7zz primary, XADMaster fallback in
   phase 2, libarchive deferred — rationale in `docs/REFERENCE.md`.
 
@@ -72,7 +93,10 @@ the next agent's context starts here.
 3. Reproduce the baseline: `swift build && swift test`, then the CLI
    smoke test from BUILD_FROM_ZERO §6–7. Do not start new work on a red
    baseline without saying so.
-4. Pick the top unfinished milestone (§5), work in small commits.
+4. Pick the top unfinished milestone (§5), work locally until the
+   milestone is complete and `swift test` is green, then push once
+   per milestone (one file per commit via the GitHub connector —
+   see `docs/TIMELOG.md` for the policy and its fallback).
 5. Before claiming done: build + unit tests + affected matrix cases pass;
    update §2 of this file and the trilingual docs (§6).
 
@@ -98,8 +122,8 @@ the next agent's context starts here.
    the browser.
 4. **M4 — Queue**: batch jobs, pause/resume, temp-name + atomic rename
    for creation, free-space precheck.
-5. **M5 — Create/edit polish**: add/remove/rename entries, conversion,
-   checksums UI, Keychain passwords.
+5. **M5 — Create/edit polish** (done): add/remove/rename entries,
+   conversion, checksums UI, Keychain passwords.
 6. **M6 — XAD fallback engine** behind the routing protocol.
 7. **M7 — Extensions & packaging**: Finder + Quick Look extensions,
    bundled signed 7zz, notarised release, Homebrew cask.
@@ -118,13 +142,14 @@ versions disagree.
 ## 7. Known limitations (v0.1)
 
 - Listing streams from `7zz` since M2 (was buffered in memory in v0.1).
-- CLI has no `-p` flag yet; passwords work via Core API and MCP.
+- CLI takes passwords from `SEEKZIP_PASSWORD` or the stored password (Keychain on macOS, in-memory on Linux test runs) — never a `-p` argument; `seekzip password store|forget` manages the stored one.
 - Creation uses temp staging + atomic rename since M4; extraction
   has a free-space precheck since M4 (a cancelled extract may leave
   partially extracted entries — re-running overwrites them with `-y`).
 - GUI is a skeleton: preview panel + nested navigation are wired in
-  code (M3), queue panel wired in code (M4), all uncompiled until the
-  M7 Xcode project; no tabs or drag-out yet.
+  code (M3), queue panel wired in code (M4), edit row + CRC column
+  wired in code (M5), all uncompiled until the M7 Xcode project; no
+  tabs or drag-out yet.
 - Passwords passed to `7zz` via `-p` are visible in the local process
   list (accepted, documented risk).
 
