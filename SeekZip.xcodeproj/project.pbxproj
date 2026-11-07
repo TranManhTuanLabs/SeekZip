@@ -1,0 +1,893 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+		04E5A05391A544C992700AFF = {
+			isa = PBXBuildFile;
+			fileRef = A28EF9FCBE5049D0AD270DFF;
+		};
+		087D2DF00B134970A54D9747 = {
+			isa = PBXBuildFile;
+			fileRef = 111F3A459C06461C981269D7;
+		};
+		0D25248AFE3846AEBED72EB2 = {
+			isa = PBXGroup;
+			children = (
+				B3F33FF96B524233BEDEA94D,
+				9B5B93D81C6848CCBDFAE1D0,
+			);
+			path = SeekZipQuickLook;
+			sourceTree = "<group>";
+		};
+		111F3A459C06461C981269D7 = {
+			isa = PBXFileReference;
+			explicitFileType = archive.ar;
+			path = libSeekZipCore.a;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		13D5D8AF35D6499CA32F90DC = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = SeekZipApp.swift;
+			sourceTree = "<group>";
+		};
+		13DDCA3039C7409E98BB351D = {
+			isa = PBXBuildFile;
+			fileRef = 215A894C11064B3E9621B75A;
+		};
+		1807CF65E41C4708AAB0E490 = {
+			isa = PBXBuildFile;
+			fileRef = 13D5D8AF35D6499CA32F90DC;
+		};
+		181BFF8E95484C328DCD2D67 = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.application;
+			path = SeekZip.app;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		18273642F4D04156A98D9D3C = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				04E5A05391A544C992700AFF,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		1986C33582FD4A0D89E5062C = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		19B8EB57EF574497880D22EA = {
+			isa = PBXGroup;
+			children = (
+				2A649E0867C747BF82A9C39A,
+			);
+			path = SeekZipFinderSync;
+			sourceTree = "<group>";
+		};
+		1AB3701562854DEB90D6DEEB = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			path = Info.plist;
+			sourceTree = "<group>";
+		};
+		1CA5E182DDA544B09E9DA7A7 = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.app-extension;
+			path = SeekZipQuickLook.appex;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		1D85416EBE0444049953D466 = {
+			isa = PBXBuildFile;
+			fileRef = 580892E2944B4C49AB8CC51B;
+		};
+		1F45FE0E7CC74A2C9CF8C6D5 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = SeekZip/SeekZip.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_HARDENED_RUNTIME = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SeekZip/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seekzip.app;
+				PRODUCT_NAME = SeekZip;
+				SDKROOT = macosx;
+				SWIFT_OPTIMIZATION_LEVEL = -O;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		1F61A78941C24406959A2DD3 = {
+			isa = PBXFileReference;
+			explicitFileType = wrapper.app-extension;
+			path = SeekZipFinderSync.appex;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		215A894C11064B3E9621B75A = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = PreviewProvider.swift;
+			sourceTree = "<group>";
+		};
+		229FB4898C244B708A8BA477 = {
+			isa = PBXBuildFile;
+			fileRef = D5BA57C3880C451C9A4D2D89;
+		};
+		2680C8C65D4B496994642E7B = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				8A22759B80014F158CB4BE2A,
+				C02A6AF7570E409C8CF01486,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		2A649E0867C747BF82A9C39A = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = FinderSync.swift;
+			sourceTree = "<group>";
+		};
+		2B99B7A4F50E46598052AB24 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = JobQueue.swift;
+			sourceTree = "<group>";
+		};
+		31AC449AFAF64EB39F2838B1 = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 2680C8C65D4B496994642E7B;
+			buildPhases = (
+				608D24A31619449A86B372E5,
+				EF2693EE3FBF4B029267C130,
+			);
+			buildRules = ();
+			dependencies = (
+				8CCA1803B1B749A294FCC0EA,
+			);
+			name = SeekZipFinderSync;
+			productName = SeekZipFinderSync;
+			productReference = 1F61A78941C24406959A2DD3;
+			productType = com.apple.product-type.app-extension;
+		};
+		34B9FFB32B114D3DB825A26D = {
+			isa = PBXBuildFile;
+			fileRef = 67FBD255C680461792467A24;
+		};
+		3AEE8A10BC2D40B983B7C105 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49BD8D170E2C48CFA31F013A;
+			proxyType = 1;
+			remoteGlobalIDString = A0DD2973D78C485CBA2FC559;
+			remoteInfo = SeekZipCore;
+		};
+		3BA8A8C6F4C44707880A657C = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
+				DEFINES_MODULE = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				MACH_O_TYPE = staticlib;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_NAME = SeekZipCore;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = -O;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		428EF50B9CDA4CFBB25DA1DC = {
+			isa = PBXGroup;
+			children = (
+				DC928F148A1C4566A143512E,
+				AE971B357F1D42C6AA5EA560,
+				19B8EB57EF574497880D22EA,
+				70C238DB63554A2B8A51940A,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		49B322B7D70C4131B473D422 = {
+			isa = PBXBuildFile;
+			fileRef = 1F61A78941C24406959A2DD3;
+			settings = {
+				ATTRIBUTES = (
+					CodeSignOnCopy,
+					RemoveHeadersOnCopy,
+				);
+			};
+		};
+		49BD8D170E2C48CFA31F013A = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1600;
+				LastUpgradeCheck = 1600;
+				TargetAttributes = {
+					31AC449AFAF64EB39F2838B1 = {
+						CreatedOnToolsVersion = 16.0;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups = {
+								enabled = 1;
+							};
+						};
+					};
+					A0DD2973D78C485CBA2FC559 = {
+						CreatedOnToolsVersion = 16.0;
+					};
+					C16C205DF24846B490E93EE9 = {
+						CreatedOnToolsVersion = 16.0;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups = {
+								enabled = 1;
+							};
+						};
+					};
+					CB411D970143402A854BBDD3 = {
+						CreatedOnToolsVersion = 16.0;
+						SystemCapabilities = {
+							com.apple.ApplicationGroups = {
+								enabled = 1;
+							};
+						};
+					};
+				};
+			};
+			buildConfigurationList = 7C5AF9CBA6A04F519538DCC2;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = 53362F5D286D4F7B812D24B8;
+			productRefGroup = C7E8C9ADF3DE4419A0070F98;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				CB411D970143402A854BBDD3,
+				A0DD2973D78C485CBA2FC559,
+				31AC449AFAF64EB39F2838B1,
+				C16C205DF24846B490E93EE9,
+			);
+		};
+		53362F5D286D4F7B812D24B8 = {
+			isa = PBXGroup;
+			children = (
+				C954BB950EE04DCC8C50D1E6,
+				428EF50B9CDA4CFBB25DA1DC,
+				EC16667931D34CA88AC02115,
+				0D25248AFE3846AEBED72EB2,
+				C7E8C9ADF3DE4419A0070F98,
+			);
+			sourceTree = "<group>";
+		};
+		580892E2944B4C49AB8CC51B = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = PasswordStore.swift;
+			sourceTree = "<group>";
+		};
+		5A4B66E752704095AC2E43E3 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = SeekZipQuickLook/QuickLook.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SeekZipQuickLook/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seekzip.app.QuickLook;
+				PRODUCT_NAME = SeekZipQuickLook;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = -Onone;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		608D24A31619449A86B372E5 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C51AD4E258404A44BC511612,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6335335AC4CC4605861CA158 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			path = Info.plist;
+			sourceTree = "<group>";
+		};
+		666E9B83C1394A55BA229578 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = Checksums.swift;
+			sourceTree = "<group>";
+		};
+		6691D0F5446E462E91175C75 = {
+			isa = PBXBuildFile;
+			fileRef = C85D64A58A8D451FB941F5A6;
+		};
+		67FBD255C680461792467A24 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ListingParser.swift;
+			sourceTree = "<group>";
+		};
+		69C7DF5A441242ACB7225847 = {
+			isa = PBXTargetDependency;
+			target = A0DD2973D78C485CBA2FC559;
+			targetProxy = D0669CAEC41E48D5A5EEB355;
+		};
+		6D992E29782949279D2E8368 = {
+			isa = PBXBuildFile;
+			fileRef = 111F3A459C06461C981269D7;
+		};
+		6EB53DC799FC4FCA9F7E8461 = {
+			isa = PBXTargetDependency;
+			target = C16C205DF24846B490E93EE9;
+			targetProxy = 81318BFE51C5461BBEB7E078;
+		};
+		70C238DB63554A2B8A51940A = {
+			isa = PBXGroup;
+			children = (
+				A28EF9FCBE5049D0AD270DFF,
+			);
+			path = SeekZipQuickLook;
+			sourceTree = "<group>";
+		};
+		792AFE36B30148D08A9A3123 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = SeekZip/SeekZip.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SeekZip/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seekzip.app;
+				PRODUCT_NAME = SeekZip;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = -Onone;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		7C5AF9CBA6A04F519538DCC2 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				FBA1BC5A98C14756AD64B0A4,
+				1986C33582FD4A0D89E5062C,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		80144C03C5804D3893076DDF = {
+			isa = PBXBuildFile;
+			fileRef = 111F3A459C06461C981269D7;
+		};
+		81318BFE51C5461BBEB7E078 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49BD8D170E2C48CFA31F013A;
+			proxyType = 1;
+			remoteGlobalIDString = C16C205DF24846B490E93EE9;
+			remoteInfo = SeekZipQuickLook;
+		};
+		85B3E41D622A4769A13768E6 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				792AFE36B30148D08A9A3123,
+				1F45FE0E7CC74A2C9CF8C6D5,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		87F45C6951964ACB9279D1B1 = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				087D2DF00B134970A54D9747,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		8A22759B80014F158CB4BE2A = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = SeekZipFinderSync/FinderSync.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = "";
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SeekZipFinderSync/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seekzip.app.FinderSync;
+				PRODUCT_NAME = SeekZipFinderSync;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = -Onone;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		8CCA1803B1B749A294FCC0EA = {
+			isa = PBXTargetDependency;
+			target = A0DD2973D78C485CBA2FC559;
+			targetProxy = AE90803D6CAA4F0EB0F9D481;
+		};
+		934650B70EA24A59AD457657 = {
+			isa = PBXBuildFile;
+			fileRef = 999DACFCE0354D5D96D94F5E;
+		};
+		93D70A663EB84A4FBE642702 = {
+			isa = PBXBuildFile;
+			fileRef = 2B99B7A4F50E46598052AB24;
+		};
+		999DACFCE0354D5D96D94F5E = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = EntryPathSafety.swift;
+			sourceTree = "<group>";
+		};
+		9B5B93D81C6848CCBDFAE1D0 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = QuickLook.entitlements;
+			sourceTree = "<group>";
+		};
+		A08FBEDC359A4A738CC9CA86 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = AppBundle.swift;
+			sourceTree = "<group>";
+		};
+		A0DD2973D78C485CBA2FC559 = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B5E40E15DEEB465EBC24553D;
+			buildPhases = (
+				CF2088F6EF844DE4AC4B0558,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = SeekZipCore;
+			productName = SeekZipCore;
+			productReference = 111F3A459C06461C981269D7;
+			productType = com.apple.product-type.library.static;
+		};
+		A28EF9FCBE5049D0AD270DFF = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = PreviewViewController.swift;
+			sourceTree = "<group>";
+		};
+		A4133081D9844885A02D35E8 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = SeekZip.entitlements;
+			sourceTree = "<group>";
+		};
+		A6A07C2779FB427FADA54202 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = SeekZipQuickLook/QuickLook.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
+				DEVELOPMENT_TEAM = "";
+				GCC_OPTIMIZATION_LEVEL = s;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SeekZipQuickLook/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seekzip.app.QuickLook;
+				PRODUCT_NAME = SeekZipQuickLook;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = -O;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		AE90803D6CAA4F0EB0F9D481 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49BD8D170E2C48CFA31F013A;
+			proxyType = 1;
+			remoteGlobalIDString = A0DD2973D78C485CBA2FC559;
+			remoteInfo = SeekZipCore;
+		};
+		AE971B357F1D42C6AA5EA560 = {
+			isa = PBXGroup;
+			children = (
+				13D5D8AF35D6499CA32F90DC,
+			);
+			path = SeekZipApp;
+			sourceTree = "<group>";
+		};
+		AF8CFF994BAC44069D300452 = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				49B322B7D70C4131B473D422,
+				FE755F0871D1493B9F6D4D80,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B261531CC8FD4F36994FAF4C = {
+			isa = PBXBuildFile;
+			fileRef = D648CCAF490D45EDA3401822;
+		};
+		B3F33FF96B524233BEDEA94D = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.xml;
+			path = Info.plist;
+			sourceTree = "<group>";
+		};
+		B4F8C70698974326B0EC05F2 = {
+			isa = PBXTargetDependency;
+			target = 31AC449AFAF64EB39F2838B1;
+			targetProxy = ED98EE34D4AB4B5A990E35A4;
+		};
+		B5190ABEC76A4D028F91E9CC = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = ();
+			inputPaths = ();
+			name = "Bundle Engines";
+			outputPaths = ();
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# M7: copy the packaged engine binaries (7zz, lsar, unar + License.txt)\n# staged by scripts/package-engines.sh into build/Helpers, then sign\n# the helpers so they inherit the app sandbox (SeekZip/Helpers.entitlements).\n# A plain `xcodebuild build` without packaged engines still succeeds:\n# the app then falls back to engines on PATH (see BundledEngines).\nset -e\nHELPERS_DIR=\"${PROJECT_DIR}/build/Helpers\"\nDEST=\"${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/Helpers\"\nif [ ! -d \"$HELPERS_DIR\" ]; then\n  echo \"warning: build/Helpers not found - run scripts/package-engines.sh before archiving; the app will fall back to engines on PATH.\"\n  exit 0\nfi\nmkdir -p \"$DEST\"\nfor f in 7zz lsar unar License.txt; do\n  [ -f \"$HELPERS_DIR/$f\" ] && cp -f \"$HELPERS_DIR/$f\" \"$DEST/\"\ndone\nif [ \"${CODE_SIGNING_ALLOWED}\" != \"NO\" ] && [ -n \"${CODE_SIGN_IDENTITY}\" ] && [ \"${CODE_SIGN_IDENTITY}\" != \"-\" ]; then\n  for bin in 7zz lsar unar; do\n    if [ -f \"$DEST/$bin\" ]; then\n      /usr/bin/codesign --force --sign \"${CODE_SIGN_IDENTITY}\" --entitlements \"${PROJECT_DIR}/SeekZip/Helpers.entitlements\" --timestamp --options runtime \"$DEST/$bin\"\n    fi\n  done\nfi\n";
+		};
+		B543423C2CD9405FA825B013 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				5A4B66E752704095AC2E43E3,
+				A6A07C2779FB427FADA54202,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B5E40E15DEEB465EBC24553D = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E3A68C3419464A60AF5C4BFE,
+				3BA8A8C6F4C44707880A657C,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BBCFC8A8DDBC430389BA868D = {
+			isa = PBXBuildFile;
+			fileRef = FBDF2AE9C5A74F499149C4F8;
+		};
+		C02A6AF7570E409C8CF01486 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ARCHS = arm64;
+				CODE_SIGN_ENTITLEMENTS = SeekZipFinderSync/FinderSync.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf-with-dsym;
+				DEVELOPMENT_TEAM = "";
+				GCC_OPTIMIZATION_LEVEL = s;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = SeekZipFinderSync/Info.plist;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				MARKETING_VERSION = 0.2.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seekzip.app.FinderSync;
+				PRODUCT_NAME = SeekZipFinderSync;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_OPTIMIZATION_LEVEL = -O;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		C16C205DF24846B490E93EE9 = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B543423C2CD9405FA825B013;
+			buildPhases = (
+				18273642F4D04156A98D9D3C,
+				D59FFBC684E4483AA1EBCA36,
+			);
+			buildRules = ();
+			dependencies = (
+				E6D875E801A648AC864C8ED4,
+			);
+			name = SeekZipQuickLook;
+			productName = SeekZipQuickLook;
+			productReference = 1CA5E182DDA544B09E9DA7A7;
+			productType = com.apple.product-type.app-extension;
+		};
+		C51AD4E258404A44BC511612 = {
+			isa = PBXBuildFile;
+			fileRef = 2A649E0867C747BF82A9C39A;
+		};
+		C7E8C9ADF3DE4419A0070F98 = {
+			isa = PBXGroup;
+			children = (
+				181BFF8E95484C328DCD2D67,
+				111F3A459C06461C981269D7,
+				1F61A78941C24406959A2DD3,
+				1CA5E182DDA544B09E9DA7A7,
+			);
+			name = Products;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		C85D64A58A8D451FB941F5A6 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ArchiveEngine.swift;
+			sourceTree = "<group>";
+		};
+		C954BB950EE04DCC8C50D1E6 = {
+			isa = PBXGroup;
+			children = (
+				1AB3701562854DEB90D6DEEB,
+				A4133081D9844885A02D35E8,
+				CB106FE7156D41B98E75CC29,
+			);
+			path = SeekZip;
+			sourceTree = "<group>";
+		};
+		CB106FE7156D41B98E75CC29 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = Helpers.entitlements;
+			sourceTree = "<group>";
+		};
+		CB411D970143402A854BBDD3 = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 85B3E41D622A4769A13768E6;
+			buildPhases = (
+				CFDB8418C453489AA6D9AA80,
+				87F45C6951964ACB9279D1B1,
+				AF8CFF994BAC44069D300452,
+				B5190ABEC76A4D028F91E9CC,
+			);
+			buildRules = ();
+			dependencies = (
+				69C7DF5A441242ACB7225847,
+				B4F8C70698974326B0EC05F2,
+				6EB53DC799FC4FCA9F7E8461,
+			);
+			name = SeekZip;
+			productName = SeekZip;
+			productReference = 181BFF8E95484C328DCD2D67;
+			productType = com.apple.product-type.application;
+		};
+		CF2088F6EF844DE4AC4B0558 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				E90E0103309E4F8D8D833BF7,
+				6691D0F5446E462E91175C75,
+				E5EE88B5859E49A5ABC768E2,
+				ED37E1ADBFE74B95AD88A05F,
+				934650B70EA24A59AD457657,
+				B261531CC8FD4F36994FAF4C,
+				93D70A663EB84A4FBE642702,
+				34B9FFB32B114D3DB825A26D,
+				1D85416EBE0444049953D466,
+				13DDCA3039C7409E98BB351D,
+				BBCFC8A8DDBC430389BA868D,
+				229FB4898C244B708A8BA477,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		CFDB8418C453489AA6D9AA80 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1807CF65E41C4708AAB0E490,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D0669CAEC41E48D5A5EEB355 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49BD8D170E2C48CFA31F013A;
+			proxyType = 1;
+			remoteGlobalIDString = A0DD2973D78C485CBA2FC559;
+			remoteInfo = SeekZipCore;
+		};
+		D55C8D2C4C53434081E85CC7 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.plist.entitlements;
+			path = FinderSync.entitlements;
+			sourceTree = "<group>";
+		};
+		D59FFBC684E4483AA1EBCA36 = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				80144C03C5804D3893076DDF,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D5BA57C3880C451C9A4D2D89 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = XADMasterEngine.swift;
+			sourceTree = "<group>";
+		};
+		D648CCAF490D45EDA3401822 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = JobControl.swift;
+			sourceTree = "<group>";
+		};
+		DC928F148A1C4566A143512E = {
+			isa = PBXGroup;
+			children = (
+				A08FBEDC359A4A738CC9CA86,
+				C85D64A58A8D451FB941F5A6,
+				E8BD0CE396F74F26951F8BC2,
+				666E9B83C1394A55BA229578,
+				999DACFCE0354D5D96D94F5E,
+				D648CCAF490D45EDA3401822,
+				2B99B7A4F50E46598052AB24,
+				67FBD255C680461792467A24,
+				580892E2944B4C49AB8CC51B,
+				215A894C11064B3E9621B75A,
+				FBDF2AE9C5A74F499149C4F8,
+				D5BA57C3880C451C9A4D2D89,
+			);
+			path = SeekZipCore;
+			sourceTree = "<group>";
+		};
+		E3A68C3419464A60AF5C4BFE = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEFINES_MODULE = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				MACH_O_TYPE = staticlib;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				PRODUCT_NAME = SeekZipCore;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = -Onone;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		E5EE88B5859E49A5ABC768E2 = {
+			isa = PBXBuildFile;
+			fileRef = E8BD0CE396F74F26951F8BC2;
+		};
+		E6D875E801A648AC864C8ED4 = {
+			isa = PBXTargetDependency;
+			target = A0DD2973D78C485CBA2FC559;
+			targetProxy = 3AEE8A10BC2D40B983B7C105;
+		};
+		E8BD0CE396F74F26951F8BC2 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ArchiveEntry.swift;
+			sourceTree = "<group>";
+		};
+		E90E0103309E4F8D8D833BF7 = {
+			isa = PBXBuildFile;
+			fileRef = A08FBEDC359A4A738CC9CA86;
+		};
+		EC16667931D34CA88AC02115 = {
+			isa = PBXGroup;
+			children = (
+				6335335AC4CC4605861CA158,
+				D55C8D2C4C53434081E85CC7,
+			);
+			path = SeekZipFinderSync;
+			sourceTree = "<group>";
+		};
+		ED37E1ADBFE74B95AD88A05F = {
+			isa = PBXBuildFile;
+			fileRef = 666E9B83C1394A55BA229578;
+		};
+		ED98EE34D4AB4B5A990E35A4 = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 49BD8D170E2C48CFA31F013A;
+			proxyType = 1;
+			remoteGlobalIDString = 31AC449AFAF64EB39F2838B1;
+			remoteInfo = SeekZipFinderSync;
+		};
+		EF2693EE3FBF4B029267C130 = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				6D992E29782949279D2E8368,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FBA1BC5A98C14756AD64B0A4 = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				MACOSX_DEPLOYMENT_TARGET = 14.6;
+				SDKROOT = macosx;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		FBDF2AE9C5A74F499149C4F8 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = SevenZipEngine.swift;
+			sourceTree = "<group>";
+		};
+		FE755F0871D1493B9F6D4D80 = {
+			isa = PBXBuildFile;
+			fileRef = 1CA5E182DDA544B09E9DA7A7;
+			settings = {
+				ATTRIBUTES = (
+					CodeSignOnCopy,
+					RemoveHeadersOnCopy,
+				);
+			};
+		};
+	};
+	rootObject = 49BD8D170E2C48CFA31F013A;
+}
