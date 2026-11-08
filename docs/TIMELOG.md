@@ -6,7 +6,7 @@ takes and how long a developer building it themselves would need.
 Updated after every milestone. Agent times come from the runtime
 (start/completed timestamps); approval times come from permissions.history.
 
-## Measured so far (as of 02:47 on 2026-11-08)
+## Measured so far (as of 18:33 on 2026-11-08)
 
 | Milestone | Start → done (Vietnam time) | Wall time | Notes |
 |---|---|---|---|
@@ -18,6 +18,7 @@ Updated after every milestone. Agent times come from the runtime
 | M6 — XAD fallback engine | 07:54 → 08:28 | ~17m local, ~14m push, ~3m CI | 16 files in one batch push (2 new: ArchiveEngine.swift, XADMasterEngine.swift) + 1 TIMELOG finalize commit. Local work 07:54–08:11 (~17m: protocol + router + XAD engine + CLI/MCP/GUI wiring, swift test 89/89 green (22 new), CLI + MCP smoke-tested end-to-end with fake 7zz/lsar/unar — real binaries not on the Linux VM). Batch push 08:11–08:25, 16 approval cards, no expiries; first card waited ~11 min (owner away), the rest approved in seconds. CI run 42324029579 on head 128c5e7 green (build + tests + fixtures + smoke, all steps). |
 | M7 — Extensions & packaging | 08:33 → 09:01 | ~16m local, ~6m push, ~3m CI | 31 files in one batch push (17 new: Xcode project + 6 plists/entitlements, 2 extension sources, AppBundle.swift, 2 scripts, ExportOptions.plist, formula + cask, RELEASE.md; 14 changed) + 1 TIMELOG finalize commit. Local work 08:33–08:49 (~16m: XAD preview fallback + bundled-engine lookup + App Group settings, Xcode project generator + validator, scripts dry-run on Linux, swift test 101/101 green (10 new), CLI smoke-tested; pbxproj validated, 95 objects, all checks pass). Batch push 08:55–09:01, 31 approval cards, all approved in seconds, no expiries. CI run 42327093592 on head dd2725d green (build + tests + fixtures + smoke, all steps). Xcode project NEVER built — needs a Mac with full Xcode. |
 | Post-M7 — CI repair (new ci.yml steps) | 01:36 → 02:47 (2026-11-08) | ~1h10m (~45m local, ~10m approvals, ~15m CI) | The owner added `brew install unar` + an Xcode build step + smoke lines to ci.yml; the new steps found 3 real bugs in a row. (1) `JobControl` called `terminate()` on a process that had not launched yet — `NSInvalidArgumentException`, signal 6, only on macOS (Linux is a no-op) — plus a `kill(0, SIGSTOP)` hazard in `pause()`; fixed by guarding on `process.isRunning` (979d849). (2) The smoke step listed `big.zip`, a fixture `generate-matrix.sh` never created; fixed by generating it (4b31520). (3) `verify` failed on `src/tiếng việt.txt` (CRC 00000000): macOS normalizes `Process` argument strings to NFD, so an NFC name stored in the archive could never match through argv — proven by a temporary diagnostic test (9c2a6b8, removed afterwards) whose macOS output showed direct `7zz e -so` returning content for NFC, NFD and listed names alike. A first fix (retry with the alternate normalization, 420d653 + regression test 0b9400c) did not help, because both attempts arrived as NFD. The real fix passes entry names to 7zz via `@listfile` so the bytes reach it verbatim (7c7c2e5, + fake-7zz support and diagnostic removal f391508). Local `swift test` 102/102 green; final run 42407493699 on head f391508 green on every step (build, Xcode project, unit tests, fixtures, smoke). Known debt left: `removeEntries`/`renameEntries` still pass names via argv (loud failure, not silent). One push (the ~106 KB test file) timed out at the tool's 120 s limit but still landed on GitHub. |
+| Post-M7 — App completion batch (menus, New Archive, password prompt, drag-drop, sort, listfile remove/rename) | 17:53 → 18:33 (2026-11-08) | ~40m (~22m local, ~2m approvals, ~15m CI incl. one red run) | Owner asked the agent to research and complete the app (UI/UX included). Audit vs parity research + HIG + MacPacker: the app had no menu bar, no New Archive, no password prompt, no drag-drop, no sort, double-click did nothing. 5 files in ONE snapshot commit b8c8bf9 (first successful multi-file push via `github push-files` MCP — 1 commit, 1 approval card; the old note in the push-policy section that the connector can only push one file at a time is now wrong, the 403 only blocks the git/trees API). Local `swift test` 104/104 green (3 skipped: no real 7zz on the Linux VM; `rn`/`d` @listfile later verified with real 7z 23.01 from apt). CI run 42474865405 on b8c8bf9 red at the Xcode build step: exactly one error, `SeekZipApp.swift:508:30: type 'ShapeStyle' has no member 'accentColor'` (`.stroke(.accentColor, ...)` resolves the leading dot against ShapeStyle) — found by reading the log in the browser (the API cannot read logs, only "exit code 65"). Fix commit ed157d1 (1 file, `Color.accentColor` + silenced the `loadObject` unused-result warning); CI run 42475893480 green on every step (build-and-test + build-app), artifact SeekZip-macOS 5,578,500 bytes. The `removeEntries`/`renameEntries` argv debt from the CI-repair row is now fixed (listfile + verify + normalization retry). |
 
 ## Whole v1 total (M1–M7)
 
@@ -66,11 +67,13 @@ Before M5, every file was pushed as its own commit with its own approval card,
 so approvals were spread across the whole milestone and the agent kept blocking
 while waiting. From M5: work locally, run local tests, and only push to GitHub
 in one batch at the end of the milestone, then check CI once.
-Note: pushing through the connector is still one file at a time (bulk push via
-git/trees is blocked by GitHub with 403), so the number of approval cards does
-not drop — they are just bunched at the end so the agent is not blocked mid-work
-and cards do not expire. Risk: CI failures are found later; mitigated by running
-local tests (Linux Swift toolchain) before pushing.
+Note (updated 2026-11-08): pushing many files in ONE commit now works
+via `github push-files` (MCP `push_files` snapshot) — 1 commit, 1 approval
+card (first proven by b8c8bf9, 5 files). The 403 only blocks the git/trees
+API, not push_files. `.github/workflows/` files are still blocked (403)
+and must be edited via the web UI or from a Mac. Risk: CI failures are
+found later; mitigated by running local tests (Linux Swift toolchain)
+before pushing.
 Priority order: Muse pushes to git itself first; only if pushing truly cannot
 complete does the owner push locally from a downloaded zip of the changed files
 (last resort). Once Muse can connect directly to the owner's machine, git pushes
