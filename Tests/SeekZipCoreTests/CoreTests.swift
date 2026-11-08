@@ -1213,10 +1213,10 @@ final class EditTests: XCTestCase {
                 rest = non_flags(args[1:])
                 add_entries(rest[0], rest[1:])
             elif cmd == "d":
-                rest = non_flags(args[1:])
+                rest = expand_listfiles(non_flags(args[1:]))
                 remove_entries(rest[0], rest[1:])
             elif cmd == "rn":
-                rest = non_flags(args[1:])
+                rest = expand_listfiles(non_flags(args[1:]))
                 rename_entries(rest[0], rest[1:])
             elif cmd == "e":
                 rest = expand_listfiles(non_flags(args[1:]))
@@ -1386,6 +1386,69 @@ final class EditTests: XCTestCase {
                 .contains("only supported for ZIP and 7z"))
         }
         XCTAssertEqual(try entryPaths(engine, archive), ["old.txt"])
+    }
+
+    /// Remove + rename with a Vietnamese name in the alternate
+    /// normalization: the entry is stored NFC, the call passes NFD.
+    /// Without the @listfile + retry, `7zz d`/`rn` would silently
+    /// match nothing (exit 0, entry still there). Real 7zz only.
+    func testRemoveEntryWithAlternateNormalization() throws {
+        guard let engine = try? SevenZipEngine() else {
+            throw XCTSkip("real 7zz not installed")
+        }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let name = "tiếng việt.txt".precomposedStringWithCanonicalMapping
+        let file = dir.appendingPathComponent(name)
+        try "xin chào\n".write(to: file, atomically: true, encoding: .utf8)
+        let archive = dir.appendingPathComponent("nfc.zip")
+        let create = Process()
+        create.executableURL = engine.binaryURL
+        create.currentDirectoryURL = dir
+        create.arguments = ["a", "-tzip", archive.path, name]
+        create.standardOutput = FileHandle.nullDevice
+        create.standardError = FileHandle.nullDevice
+        try create.run()
+        create.waitUntilExit()
+        XCTAssertEqual(create.terminationStatus, 0, "fixture creation failed")
+
+        let nfd = name.decomposedStringWithCanonicalMapping
+        XCTAssertFalse(nfd.utf8.elementsEqual(name.utf8),
+                       "test needs a name with two normal forms")
+        try engine.removeEntries(archive: archive, entries: [nfd])
+        XCTAssertFalse(try engine.list(archive: archive).entries.contains { $0.path == name })
+    }
+
+    func testRenameEntryWithAlternateNormalization() throws {
+        guard let engine = try? SevenZipEngine() else {
+            throw XCTSkip("real 7zz not installed")
+        }
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let name = "tiếng việt.txt".precomposedStringWithCanonicalMapping
+        let file = dir.appendingPathComponent(name)
+        try "xin chào\n".write(to: file, atomically: true, encoding: .utf8)
+        let archive = dir.appendingPathComponent("nfc.zip")
+        let create = Process()
+        create.executableURL = engine.binaryURL
+        create.currentDirectoryURL = dir
+        create.arguments = ["a", "-tzip", archive.path, name]
+        create.standardOutput = FileHandle.nullDevice
+        create.standardError = FileHandle.nullDevice
+        try create.run()
+        create.waitUntilExit()
+        XCTAssertEqual(create.terminationStatus, 0, "fixture creation failed")
+
+        let nfd = name.decomposedStringWithCanonicalMapping
+        try engine.renameEntries(archive: archive,
+                                 renames: [(old: nfd, new: "renamed.txt")])
+        let paths = try engine.list(archive: archive).entries.map(\.path)
+        XCTAssertFalse(paths.contains { $0 == name })
+        XCTAssertTrue(paths.contains("renamed.txt"))
     }
 
     func testAddToRarFailsClearly() throws {

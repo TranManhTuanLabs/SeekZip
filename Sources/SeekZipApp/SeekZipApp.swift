@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 import SeekZipCore
 
 // SeekZipApp — SwiftUI frontend skeleton (v0.1).
@@ -35,6 +36,17 @@ final class SeekZipAppDelegate: NSObject, NSApplicationDelegate {
 
 extension Notification.Name {
     static let seekZipOpenArchive = Notification.Name("seekzip.openArchive")
+    /// Menu-bar commands (see `SeekZipApp.commands`): the App struct
+    /// posts these; BrowserView performs them. Same pattern as the
+    /// Finder-open notification above — the menu lives outside the
+    /// view, so notifications are the thinnest bridge.
+    static let seekZipOpenArchiveRequest = Notification.Name("seekzip.openArchiveRequest")
+    static let seekZipNewArchiveRequest = Notification.Name("seekzip.newArchiveRequest")
+    static let seekZipExtractSelectedRequest = Notification.Name("seekzip.extractSelectedRequest")
+    static let seekZipVerifyRequest = Notification.Name("seekzip.verifyRequest")
+    static let seekZipConvertRequest = Notification.Name("seekzip.convertRequest")
+    static let seekZipAddFilesRequest = Notification.Name("seekzip.addFilesRequest")
+    static let seekZipRemoveSelectedRequest = Notification.Name("seekzip.removeSelectedRequest")
 }
 
 @main
@@ -46,6 +58,43 @@ struct SeekZipApp: App {
             BrowserView()
         }
         .windowStyle(.titleBar)
+        // Menu bar (HIG: the menu is the primary discovery mechanism
+        // — users look there before anywhere else). Before this, the
+        // app had no commands at all and the status line's "⌘O" was
+        // a lie. ⌘N stays "New Window" (SwiftUI default), so New
+        // Archive takes ⌘⇧N, the usual "New <thing>" slot.
+        .commands {
+            CommandGroup(before: .newItem) {
+                Button("Open Archive…") {
+                    NotificationCenter.default.post(name: .seekZipOpenArchiveRequest, object: nil)
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                Button("New Archive…") {
+                    NotificationCenter.default.post(name: .seekZipNewArchiveRequest, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
+            }
+            CommandMenu("Archive") {
+                Button("Extract Selected") {
+                    NotificationCenter.default.post(name: .seekZipExtractSelectedRequest, object: nil)
+                }
+                .keyboardShortcut("e", modifiers: .command)
+                Button("Add Files…") {
+                    NotificationCenter.default.post(name: .seekZipAddFilesRequest, object: nil)
+                }
+                Divider()
+                Button("Verify") {
+                    NotificationCenter.default.post(name: .seekZipVerifyRequest, object: nil)
+                }
+                Button("Convert…") {
+                    NotificationCenter.default.post(name: .seekZipConvertRequest, object: nil)
+                }
+                Divider()
+                Button("Remove Selected", role: .destructive) {
+                    NotificationCenter.default.post(name: .seekZipRemoveSelectedRequest, object: nil)
+                }
+            }
+        }
     }
 }
 
@@ -181,12 +230,39 @@ struct AboutView: View {
     }
 }
 
+/// Lock-guarded URL list for the async drop loader: the
+/// `NSItemProvider` completion is @Sendable, so a captured `var`
+/// would not compile cleanly under Swift 6 checking.
+private final class URLCollector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _urls: [URL] = []
+    var urls: [URL] { lock.lock(); defer { lock.unlock() }; return _urls }
+    func append(_ url: URL) { lock.lock(); _urls.append(url); lock.unlock() }
+}
+
+/// List sort order (MacPacker/Finder offer sortable columns; the
+/// flat List gets a menu picker instead — same function, less chrome).
+private enum EntrySortOrder: String, CaseIterable {
+    case archive = "Archive order"
+    case name = "Name"
+    case size = "Size"
+    case date = "Date"
+}
+
 struct BrowserView: View {
     @State private var archiveURL: URL?
     @State private var info: ArchiveInfo?
     @State private var selection = Set<String>()
     @State private var status = "Open an archive to begin (⌘O)"
     @State private var filter = ""
+    @State private var sortOrder = EntrySortOrder.archive
+    @State private var dropTargeted = false
+    // Password prompt for encrypted archives (see `openArchive`):
+    // the sheet asks once, saves to the Keychain, and retries.
+    @State private var showPasswordPrompt = false
+    @State private var passwordInput = ""
+    @State private var passwordPromptWrong = false
+    @State private var pendingPasswordURL: URL?
     // M3: where we are inside nested archives, and the Space preview.
     @State private var nestedPath: [String] = []
     @State private var preview: EntryPreview?
@@ -208,8 +284,33 @@ struct BrowserView: View {
 
     private var shownEntries: [ArchiveEntry] {
         guard let info else { return [] }
-        guard !filter.isEmpty else { return info.entries }
-        return info.entries.filter { $0.path.localizedCaseInsensitiveContains(filter) }
+        let filtered: [ArchiveEntry]
+        if filter.isEmpty { filtered = info.entries }
+        else { filtered = info.entries.filter { $0.path.localizedCaseInsensitiveContains(filter) } }
+        switch sortOrder {
+        case .archive:
+            return filtered
+        case .name:
+            return filtered.sorted {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+                return $0.path.localizedStandardCompare($1.path) == .orderedAscending
+            }
+        case .size:
+            return filtered.sorted {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+                return $0.size > $1.size
+            }
+        case .date:
+            return filtered.sorted {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory }
+                switch ($0.modified, $1.modified) {
+                case (nil, nil): return $0.path < $1.path
+                case (nil, _): return false
+                case (_, nil): return true
+                case let (a?, b?): return a > b
+                }
+            }
+        }
     }
 
     var body: some View {
@@ -218,7 +319,14 @@ struct BrowserView: View {
                 Button("Open Archive…") { openArchive() }
                 TextField("Filter entries", text: $filter)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 260)
+                    .frame(maxWidth: 200)
+                Picker("Sort", selection: $sortOrder) {
+                    ForEach(EntrySortOrder.allCases, id: \.self) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(maxWidth: 140)
                 Spacer()
                 // Settings: engine picker + About (with GitHub link).
                 Button("Settings…") { showSettings = true }
@@ -228,6 +336,32 @@ struct BrowserView: View {
             .padding(8)
             .sheet(isPresented: $showSettings) {
                 SettingsView(settings: engineSettings)
+            }
+            .sheet(isPresented: $showPasswordPrompt) {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Password required").font(.headline)
+                    Text(pendingPasswordURL?.lastPathComponent ?? "This archive")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if passwordPromptWrong {
+                        Text("Wrong password — try again.")
+                            .foregroundStyle(.red)
+                            .font(.footnote)
+                    }
+                    SecureField("Password", text: $passwordInput)
+                        .textFieldStyle(.roundedBorder)
+                    Text("The password is saved in your Keychain for this archive, so previews and extracts work without asking again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { showPasswordPrompt = false; passwordInput = "" }
+                        Button("Open") { submitPassword() }
+                            .keyboardShortcut(.defaultAction)
+                    }
+                }
+                .padding()
+                .frame(minWidth: 320)
             }
 
             // M5: edit row — add/remove/rename/convert/verify. All of
@@ -271,6 +405,11 @@ struct BrowserView: View {
                 HStack {
                     Image(systemName: entry.isDirectory ? "folder"
                         : entry.isArchive ? "archivebox" : "doc")
+                    if entry.isEncrypted {
+                        Image(systemName: "lock.fill")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     Text(entry.path)
                     Spacer()
                     // M5: CRC-32 from the listing (— when the format
@@ -283,8 +422,10 @@ struct BrowserView: View {
                         .foregroundStyle(.secondary)
                 }
                 .tag(entry.path)
-                // M3: double-click a nested archive to drill into it.
-                .onTapGesture(count: 2) { drillInto(entry) }
+                // Double-click opens: drill into a nested archive,
+                // open a file in its default app (folders do nothing
+                // — the list is flat, there is no folder to enter).
+                .onTapGesture(count: 2) { openSelected(entry) }
                 // Hover selects the row, so the preview (when open)
                 // follows the mouse just like it follows the arrow keys.
                 .onHover { hovering in
@@ -293,6 +434,7 @@ struct BrowserView: View {
                 // Right-click menu: the same actions as the toolbar,
                 // for the row under the cursor.
                 .contextMenu {
+                    Button("Open") { selection = [entry.path]; openSelected(entry) }
                     Button("Preview") { selection = [entry.path]; togglePreview() }
                     Button("Extract Selected") { selection = [entry.path]; extractSelected() }
                     Button("Copy Path") { copyEntryPath(entry) }
@@ -302,6 +444,15 @@ struct BrowserView: View {
             }
             .onKeyPress(.space) {
                 togglePreview()
+                return .handled
+            }
+            // Return opens the selected entry (same as double-click),
+            // so opening is never mouse-only (HIG).
+            .onKeyPress(.return) {
+                if let selected = selection.first,
+                   let entry = info?.entries.first(where: { $0.path == selected }) {
+                    openSelected(entry)
+                }
                 return .handled
             }
             // Preview follows the selection (mouse hover/click or
@@ -346,11 +497,31 @@ struct BrowserView: View {
                 .padding(6)
         }
         .frame(minWidth: 640, minHeight: 420)
+        // Drag files in from Finder: an archive opens, files are
+        // added to the open archive, or start a new archive.
+        .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
+            handleDroppedProviders(providers)
+        }
+        .overlay {
+            if dropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.accentColor, lineWidth: 2)
+                    .padding(4)
+            }
+        }
         // M7: an archive opened from Finder (double-click / extension)
         // arrives via the app delegate as a notification.
         .onReceive(NotificationCenter.default.publisher(for: .seekZipOpenArchive)) { note in
             if let url = note.object as? URL { openArchive(url) }
         }
+        // Menu-bar commands (see `SeekZipApp.commands`).
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipOpenArchiveRequest)) { _ in openArchive() }
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipNewArchiveRequest)) { _ in createNewArchive() }
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipExtractSelectedRequest)) { _ in extractSelected() }
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipVerifyRequest)) { _ in verifyArchive() }
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipConvertRequest)) { _ in convertArchive() }
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipAddFilesRequest)) { _ in addFiles() }
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipRemoveSelectedRequest)) { _ in removeSelected() }
     }
 
     /// M4: the queue panel. Jobs are persisted by `JobQueue`, so this
@@ -571,8 +742,12 @@ struct BrowserView: View {
     }
 
     /// M7: open an archive URL directly (Finder double-click /
-    /// extension), without the file panel.
-    private func openArchive(_ url: URL) {
+    /// extension), without the file panel. A header-encrypted archive
+    /// (or a wrong stored password) throws `wrongPassword` — the
+    /// router deliberately does not fall back to XAD for that error,
+    /// so it reaches here and the password sheet asks the user
+    /// instead of failing with a bare status line.
+    private func openArchive(_ url: URL, password: String? = nil) {
         archiveURL = url
         nestedPath = []
         preview = nil
@@ -583,15 +758,189 @@ struct BrowserView: View {
                     status = "No engine available"
                     return
                 }
-                let loaded = try router.list(archive: url)
+                let loaded = try router.list(archive: url, password: password)
                 info = loaded
                 status = "\(loaded.entries.count) entries · " +
                          ByteCountFormatter.string(fromByteCount: Int64(loaded.totalUncompressed),
                                                    countStyle: .file) + " uncompressed"
+            } catch EngineError.wrongPassword {
+                pendingPasswordURL = url
+                passwordPromptWrong = password != nil
+                passwordInput = ""
+                showPasswordPrompt = true
+                status = "This archive needs a password"
             } catch {
                 status = "Error: \(error)"
             }
         }
+    }
+
+    /// The password sheet's Open button: save to the Keychain (so
+    /// previews, extracts and reloads resolve it too) and retry the
+    /// listing with the password. A wrong password re-opens the sheet
+    /// with the error flag (see `openArchive`'s catch).
+    private func submitPassword() {
+        guard let url = pendingPasswordURL, !passwordInput.isEmpty else { return }
+        let password = passwordInput
+        passwordInput = ""
+        showPasswordPrompt = false
+        try? PasswordStore.shared.save(password: password, for: url.path)
+        openArchive(url, password: password)
+    }
+
+    /// Create a new archive from files (menu ⌘⇧N, or files dropped
+    /// onto the window with no archive open). Picks the source files
+    /// first, then the destination; the format follows the destination
+    /// extension (7z / ZIP / TAR, default 7z). The new archive opens
+    /// in the browser when it is created.
+    private func createNewArchive(sources: [URL]? = nil) {
+        let picked: [URL]
+        if let sources {
+            picked = sources
+        } else {
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = true
+            panel.prompt = "Choose"
+            guard panel.runModal() == .OK else { return }
+            picked = panel.urls
+        }
+        guard !picked.isEmpty else { return }
+        let save = NSSavePanel()
+        save.nameFieldStringValue = "Archive.7z"
+        save.prompt = "Create"
+        guard save.runModal() == .OK, let dest = save.url else { return }
+        let ext = dest.pathExtension.lowercased()
+        let format = (ext == "zip" || ext == "7z" || ext == "tar") ? ext : "7z"
+        let finalDest = (ext == "zip" || ext == "7z" || ext == "tar")
+            ? dest : dest.appendingPathExtension("7z")
+        Task {
+            do {
+                let engine = try SevenZipEngine()
+                try engine.create(archive: finalDest, sources: picked, format: format)
+                status = "Created \(finalDest.lastPathComponent)"
+                openArchive(finalDest)
+            } catch {
+                status = "Create failed: \(error)"
+            }
+        }
+    }
+
+    /// Open the selected entry: drill into a nested archive, open a
+    /// file in its default app, do nothing for folders (the list is
+    /// flat — there is no folder to navigate into). This is what
+    /// double-click, Return and the context menu's Open all call, so
+    /// no action is mouse-only (HIG).
+    private func openSelected(_ entry: ArchiveEntry) {
+        if entry.isArchive { drillInto(entry); return }
+        guard !entry.isDirectory else { return }
+        openEntryInDefaultApp(entry)
+    }
+
+    /// Open one entry in its default app: stream its bytes to a temp
+    /// file and hand it to the workspace. Nested entries walk the
+    /// chain first — each level's archive file is an entry in the
+    /// previous level, streamed out the same way. Temp files stay in
+    /// the temp dir (the OS purges them); the opened app may keep the
+    /// file open, so they are not deleted on quit.
+    private func openEntryInDefaultApp(_ entry: ArchiveEntry) {
+        guard let archiveURL else { return }
+        Task {
+            do {
+                guard let router = engineSettings.makeRouter() else {
+                    status = "No engine available"
+                    return
+                }
+                let fm = FileManager.default
+                var tempDir: URL?
+                var currentArchive = archiveURL
+                for nestedEntry in nestedPath {
+                    var data = Data()
+                    let ok = try router.streamEntry(archive: currentArchive,
+                                                    entry: nestedEntry,
+                                                    password: nil) { chunk in
+                        data.append(chunk)
+                        return true
+                    }
+                    guard ok else {
+                        status = "Cannot open \(entry.path): nested archive is empty"
+                        return
+                    }
+                    if tempDir == nil {
+                        tempDir = fm.temporaryDirectory
+                            .appendingPathComponent("seekzip-open-\(UUID().uuidString)")
+                        try fm.createDirectory(at: tempDir!, withIntermediateDirectories: true)
+                    }
+                    let nestedURL = tempDir!
+                        .appendingPathComponent(URL(fileURLWithPath: nestedEntry).lastPathComponent)
+                    try data.write(to: nestedURL)
+                    currentArchive = nestedURL
+                }
+                var data = Data()
+                let ok = try router.streamEntry(archive: currentArchive,
+                                                entry: entry.path,
+                                                password: nil) { chunk in
+                    data.append(chunk)
+                    return true
+                }
+                guard ok else {
+                    status = "Cannot open \(entry.path)"
+                    return
+                }
+                if tempDir == nil {
+                    tempDir = fm.temporaryDirectory
+                        .appendingPathComponent("seekzip-open-\(UUID().uuidString)")
+                    try fm.createDirectory(at: tempDir!, withIntermediateDirectories: true)
+                }
+                let base = entry.path.split(separator: "/").last.map(String.init) ?? entry.path
+                let dest = tempDir!.appendingPathComponent(base)
+                try data.write(to: dest)
+                _ = NSWorkspace.shared.open(dest)
+                status = "Opened \(entry.path)"
+            } catch {
+                status = "Cannot open \(entry.path): \(error)"
+            }
+        }
+    }
+
+    /// Drag & drop in (Finder → SeekZip): resolve the dropped file
+    /// URLs, then hand them to `handleDroppedURLs` on the main queue.
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        let fileProviders = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }
+        guard !fileProviders.isEmpty else { return false }
+        let group = DispatchGroup()
+        let collector = URLCollector()
+        for provider in fileProviders {
+            group.enter()
+            provider.loadObject(ofClass: URL.self) { url, _ in
+                if let url { collector.append(url) }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { self.handleDroppedURLs(collector.urls) }
+        return true
+    }
+
+    /// What a drop means depends on what was dropped and what is
+    /// open: one archive opens it; files dropped onto an open archive
+    /// are added to it; files dropped with nothing open start a new
+    /// archive (the MacPacker/Keka pattern).
+    private func handleDroppedURLs(_ urls: [URL]) {
+        guard !urls.isEmpty else {
+            status = "Couldn't read the dropped files"
+            return
+        }
+        if urls.count == 1, SevenZipEngine.format(of: urls[0]) != nil {
+            openArchive(urls[0])
+            return
+        }
+        if archiveURL != nil {
+            addFiles(sources: urls)
+            return
+        }
+        createNewArchive(sources: urls)
     }
 
     /// M5: reload the current archive's listing after an edit, so the
@@ -618,19 +967,27 @@ struct BrowserView: View {
 
     /// M5: add files to the archive (temp-copy + atomic replace in
     /// the core, so a failed add leaves the original untouched).
-    private func addFiles() {
+    /// With `sources` given (drag & drop), the panel is skipped.
+    private func addFiles(sources: [URL]? = nil) {
         guard let archiveURL else { return }
-        let panel = NSOpenPanel()
-        panel.allowsMultipleSelection = true
-        panel.canChooseDirectories = true
-        panel.prompt = "Add"
-        guard panel.runModal() == .OK else { return }
+        let picked: [URL]
+        if let sources {
+            picked = sources
+        } else {
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = true
+            panel.prompt = "Add"
+            guard panel.runModal() == .OK else { return }
+            picked = panel.urls
+        }
+        guard !picked.isEmpty else { return }
         Task {
             do {
                 let engine = try SevenZipEngine()
                 try engine.addEntries(archive: archiveURL,
-                                      sources: panel.urls)
-                status = "Added \(panel.urls.count) file(s)"
+                                      sources: picked)
+                status = "Added \(picked.count) file(s)"
                 reloadListing()
             } catch {
                 status = "Add failed: \(error)"

@@ -33,7 +33,7 @@ public final class KeychainPasswordStore: PasswordStoring {
     public init() {}
 
     public func password(for archivePath: String) -> String? {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: archivePath,
@@ -94,7 +94,8 @@ public final class KeychainPasswordStore: PasswordStoring {
 /// survived in a file on Linux would be worse than no storage at all.
 /// On macOS this class is only used by tests; production uses
 /// `KeychainPasswordStore`.
-public final class InMemoryPasswordStore: PasswordStoring {
+/// Access is guarded by `lock`, so the unchecked conformance is sound.
+public final class InMemoryPasswordStore: PasswordStoring, @unchecked Sendable {
     private let lock = NSLock()
     private var passwords: [String: String] = [:]
 

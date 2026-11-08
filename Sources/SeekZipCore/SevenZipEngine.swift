@@ -779,12 +779,63 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
                                          message: "entry not found in archive: \(name)")
             }
         }
+        try removeEntriesOnce(archive: archive, format: format, entries: entries,
+                              password: password, control: control, onProgress: onProgress)
+        // Verify the entries are really gone: `7zz d` exits 0 even when
+        // a name matches nothing, and a name in the wrong Unicode
+        // normalization silently matches nothing. Retry once with the
+        // alternate normalization for whatever is still there.
+        var remaining = try remainingEntries(archive: archive, names: entries,
+                                             password: password, control: control)
+        if !remaining.isEmpty {
+            var retry: [String] = []
+            for stored in remaining {
+                if let requested = entries.first(where: { $0 == stored }),
+                   let alternate = Self.alternateNormalization(of: requested) {
+                    retry.append(alternate)
+                }
+            }
+            if !retry.isEmpty {
+                try removeEntriesOnce(archive: archive, format: format, entries: retry,
+                                      password: password, control: control, onProgress: onProgress)
+                remaining = try remainingEntries(archive: archive, names: entries,
+                                                 password: password, control: control)
+            }
+        }
+        guard remaining.isEmpty else {
+            throw EngineError.failed(exitCode: 2,
+                                     message: "entry not found in archive: \(remaining.joined(separator: ", "))")
+        }
+    }
+
+    /// Stored names (from a fresh listing) that still match any of
+    /// `names`. Swift `==` is normalization-insensitive, so an NFC
+    /// stored name matches an NFD request and vice versa.
+    private func remainingEntries(archive: URL, names: [String], password: String?,
+                                  control: JobControl?) throws -> [String] {
+        try list(archive: archive, password: password, control: control)
+            .entries.map(\.path).filter { names.contains($0) }
+    }
+
+    /// One `7zz d` pass over a temp copy (see `editArchive`). Entry
+    /// names go through a @listfile when possible — see
+    /// `makeEntryListFile`.
+    private func removeEntriesOnce(archive: URL, format: String, entries: [String],
+                                   password: String?, control: JobControl?,
+                                   onProgress: ((JobProgress) -> Void)?) throws {
         try editArchive(archive: archive, format: format, password: password,
                         control: control) { temp in
             var args = ["d", "-y", "-sccUTF-8"]
             if let password { args.append("-p\(password)") }
             args.append(temp.path)
-            args.append(contentsOf: entries)
+            var listFile: URL?
+            if let file = try Self.makeEntryListFile(names: entries) {
+                listFile = file
+                args.append("@\(file.path)")
+            } else {
+                args.append(contentsOf: entries)
+            }
+            defer { if let listFile { try? FileManager.default.removeItem(at: listFile) } }
             let (code, output) = try run(args, control: control,
                                          onProgress: onProgress.map { outer in
                 { progress in
@@ -833,12 +884,55 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
             }
             pairs.append(contentsOf: [old, new])
         }
+        try renameEntriesOnce(archive: archive, format: format, pairs: pairs,
+                              password: password, control: control, onProgress: onProgress)
+        // Verify the old names are really gone (same silent-no-match
+        // caveat as removeEntries); retry once with the alternate
+        // normalization of the old names that are still there.
+        let olds = renames.map { $0.old }
+        var remaining = try remainingEntries(archive: archive, names: olds,
+                                             password: password, control: control)
+        if !remaining.isEmpty {
+            var retryPairs: [String] = []
+            for stored in remaining {
+                if let pair = renames.first(where: { $0.old == stored }),
+                   let alternate = Self.alternateNormalization(of: pair.old) {
+                    retryPairs.append(contentsOf: [alternate, pair.new])
+                }
+            }
+            if !retryPairs.isEmpty {
+                try renameEntriesOnce(archive: archive, format: format, pairs: retryPairs,
+                                      password: password, control: control, onProgress: onProgress)
+                remaining = try remainingEntries(archive: archive, names: olds,
+                                                 password: password, control: control)
+            }
+        }
+        guard remaining.isEmpty else {
+            throw EngineError.failed(exitCode: 2,
+                                     message: "entry not found in archive: \(remaining.joined(separator: ", "))")
+        }
+    }
+
+    /// One `7zz rn` pass over a temp copy (see `editArchive`). The
+    /// pairs are flat [old, new, old, new, …] and go through a
+    /// @listfile when possible (one name per line) — same NFD reason
+    /// as removeEntries (see `makeEntryListFile`).
+    private func renameEntriesOnce(archive: URL, format: String, pairs: [String],
+                                   password: String?, control: JobControl?,
+                                   onProgress: ((JobProgress) -> Void)?) throws {
         try editArchive(archive: archive, format: format, password: password,
                         control: control) { temp in
             var args = ["rn", "-y", "-sccUTF-8"]
             if let password { args.append("-p\(password)") }
             args.append(temp.path)
-            args.append(contentsOf: pairs)
+            var listFile: URL?
+            if let file = try Self.makeEntryListFile(names: pairs) {
+                listFile = file
+                args.append("@\(file.path)")
+            } else {
+                args.append(contentsOf: pairs)
+            }
+            defer { if let listFile { try? FileManager.default.removeItem(at: listFile) } }
             let (code, output) = try run(args, control: control,
                                          onProgress: onProgress.map { outer in
                 { progress in

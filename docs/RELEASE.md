@@ -6,31 +6,30 @@ steps 3–5 are the first build, steps 6–8 are the release itself.
 
 ## 0. What is (and is not) verified yet
 
-Verified on the Linux CI/VM (2026-11-07, M7):
+Verified on CI (macOS 15 runner, 2026-11-08):
 
-- `swift build` + `swift test` green (101 tests, incl. the new M7
-  preview-fallback and bundled-engine tests).
-- `SeekZip.xcodeproj/project.pbxproj` parses as a valid OpenStep plist
-  (`scripts/validate-xcodeproj.py` — run it after any project edit);
-  every referenced file exists, every `SeekZipCore` source is in the
-  core target, both extensions are embedded and link the core.
-- All `.plist` / `.entitlements` files parse; `scripts/package-engines.sh`
-  downloads 7-Zip 26.05 and verifies its SHA-256; both scripts pass
-  `bash -n`; `scripts/release.sh` refuses to run off macOS.
-- The CLI smoke path works (`seekzip engines`, clean exit codes).
+- `swift build` + `swift test` green (104 tests), and the Xcode
+  project builds unsigned via `xcodebuild` (Debug in
+  `build-and-test`, Release in the on-demand `build-app` job) —
+  the GUI (`Sources/SeekZipApp`) compiles on CI. The `build-app`
+  job (commit message containing `[build-app]`) packages
+  `SeekZip.app` with the engines bundled and uploads it as the
+  `SeekZip-macOS` artifact, so the app can be tested without
+  installing Xcode locally.
+- `scripts/package-engines.sh` downloads 7-Zip 26.05 and verifies
+  its SHA-256; the CLI smoke path works (`seekzip engines`, clean
+  exit codes).
 
-NOT verified — needs a Mac with full Xcode (nobody has run this yet):
+NOT verified — needs a Mac with full Xcode / a Developer account
+(nobody has run this yet):
 
-- The Xcode project has never been built. The GUI (`Sources/SeekZipApp`)
-  has never compiled anywhere: SwiftUI macros need full Xcode, and the
-  Mac that owns this project has Command Line Tools only.
 - Signing, notarisation, stapling, Gatekeeper, the Finder Sync and
   Quick Look extensions loading, the App Group sharing settings, and
   the bundled helpers running inside the sandbox are all unproven
-  until the first build on the Mac. Expect the first build to surface
-  small fixable issues (missing team, entitlements, a wrong build
-  setting). That is normal for a first Xcode project — fix them in
-  Xcode, commit, and re-run the validator.
+  until the first signed build on the Mac. Expect the first build to
+  surface small fixable issues (missing team, entitlements, a wrong
+  build setting). That is normal for a first Xcode project — fix them
+  in Xcode, commit, and re-run the validator.
 
 ## 1. One-time setup (owner)
 
