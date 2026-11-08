@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import QuickLookUI
 import SeekZipCore
 
 // SeekZipApp — SwiftUI frontend skeleton (v0.1).
@@ -47,6 +48,7 @@ extension Notification.Name {
     static let seekZipConvertRequest = Notification.Name("seekzip.convertRequest")
     static let seekZipAddFilesRequest = Notification.Name("seekzip.addFilesRequest")
     static let seekZipRemoveSelectedRequest = Notification.Name("seekzip.removeSelectedRequest")
+    static let seekZipQuickLookRequest = Notification.Name("seekzip.quickLookRequest")
 }
 
 @main
@@ -79,6 +81,9 @@ struct SeekZipApp: App {
                     NotificationCenter.default.post(name: .seekZipExtractSelectedRequest, object: nil)
                 }
                 .keyboardShortcut("e", modifiers: .command)
+                Button("Quick Look") {
+                    NotificationCenter.default.post(name: .seekZipQuickLookRequest, object: nil)
+                }
                 Button("Add Files…") {
                     NotificationCenter.default.post(name: .seekZipAddFilesRequest, object: nil)
                 }
@@ -247,6 +252,170 @@ private enum EntrySortOrder: String, CaseIterable {
     case name = "Name"
     case size = "Size"
     case date = "Date"
+}
+
+/// Stream one entry's bytes to a file in `tempDir`, chunk by chunk
+/// (the whole file never sits in RAM), and return the file URL.
+/// On any failure the function throws and the caller never receives
+/// the URL, so a partial file in the temp dir cannot be mistaken for
+/// a complete one (the OS purges the temp dir).
+func streamOneEntry(router: EngineRouter, archive: URL, entry: String,
+                    password: String?, fileName: String,
+                    in tempDir: URL) throws -> URL {
+    let dest = tempDir.appendingPathComponent(fileName)
+    guard FileManager.default.createFile(atPath: dest.path, contents: nil) else {
+        throw EngineError.failed(exitCode: 3, message: "Cannot create temp file for \(entry)")
+    }
+    guard let handle = FileHandle(forWritingAtPath: dest.path) else {
+        throw EngineError.failed(exitCode: 3, message: "Cannot open temp file for \(entry)")
+    }
+    defer { try? handle.close() }
+    let ok = try router.streamEntry(archive: archive, entry: entry,
+                                    password: password) { chunk in
+        handle.write(chunk)
+        return true
+    }
+    guard ok else {
+        throw EngineError.failed(exitCode: 3, message: "Entry is empty: \(entry)")
+    }
+    return dest
+}
+
+/// Walk the nested-archive chain, streaming each level to a temp
+/// file, and return the innermost archive URL (the original URL when
+/// `nestedPath` is empty). Intermediate files get a unique name that
+/// keeps the original extension, so an engine that sniffs by
+/// extension still recognises the format — and so a level never
+/// truncates the file the next level reads from (two levels can share
+/// a base name).
+func resolveNestedArchive(archiveURL: URL, nestedPath: [String],
+                          password: String?) throws -> URL {
+    guard !nestedPath.isEmpty else { return archiveURL }
+    guard let router = EngineSettings.shared.makeRouter() else {
+        throw EngineError.failed(exitCode: 3, message: "No engine available")
+    }
+    let fm = FileManager.default
+    let tempDir = fm.temporaryDirectory
+        .appendingPathComponent("seekzip-nested-\(UUID().uuidString)")
+    try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    var currentArchive = archiveURL
+    for nestedEntry in nestedPath {
+        let ext = URL(fileURLWithPath: nestedEntry).pathExtension
+        let uniqueName = UUID().uuidString + (ext.isEmpty ? "" : ".\(ext)")
+        currentArchive = try streamOneEntry(router: router, archive: currentArchive,
+                                            entry: nestedEntry, password: password,
+                                            fileName: uniqueName, in: tempDir)
+    }
+    return currentArchive
+}
+
+/// Stream one (file) entry to a temp file, walking the nested chain
+/// first. The returned file keeps the entry's real name, so the
+/// default app / Quick Look see the right extension. Temp files stay
+/// in the temp dir (the OS purges them); the opened app may keep the
+/// file open, so they are not deleted on quit.
+func streamEntryToTempFile(archiveURL: URL, nestedPath: [String],
+                           entry: ArchiveEntry, password: String?) throws -> URL {
+    let resolved = try resolveNestedArchive(archiveURL: archiveURL,
+                                            nestedPath: nestedPath,
+                                            password: password)
+    guard let router = EngineSettings.shared.makeRouter() else {
+        throw EngineError.failed(exitCode: 3, message: "No engine available")
+    }
+    let fm = FileManager.default
+    let tempDir = fm.temporaryDirectory
+        .appendingPathComponent("seekzip-open-\(UUID().uuidString)")
+    try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    return try streamOneEntry(router: router, archive: resolved,
+                              entry: entry.path, password: password,
+                              fileName: entry.name, in: tempDir)
+}
+
+/// Drag-out (SeekZip → Finder): a file promise whose content is
+/// produced on demand. Finder calls `writePromiseTo` on a background
+/// queue when the drop lands; the delegate extracts the entry
+/// (walking the nested chain first) and moves it to the promised URL.
+/// The provider retains the delegate until the promise completes, so
+/// no extra lifetime management is needed. `extract` (not streaming)
+/// is used because it handles directory entries too — a promised
+/// folder is extracted as a whole subtree and moved as one item.
+final class DragOutPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
+    private let archiveURL: URL
+    private let nestedPath: [String]
+    private let entry: ArchiveEntry
+    private let password: String?
+
+    init(archiveURL: URL, nestedPath: [String], entry: ArchiveEntry, password: String?) {
+        self.archiveURL = archiveURL
+        self.nestedPath = nestedPath
+        self.entry = entry
+        self.password = password
+    }
+
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider,
+                             fileNameForType fileType: String) -> String {
+        entry.name
+    }
+
+    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider,
+                             writePromiseTo url: URL,
+                             completionHandler: @escaping (Error?) -> Void) {
+        do {
+            let resolved = try resolveNestedArchive(archiveURL: archiveURL,
+                                                    nestedPath: nestedPath,
+                                                    password: password)
+            guard let router = EngineSettings.shared.makeRouter() else {
+                throw EngineError.failed(exitCode: 3, message: "No engine available")
+            }
+            let fm = FileManager.default
+            let tempDir = fm.temporaryDirectory
+                .appendingPathComponent("seekzip-drag-\(UUID().uuidString)")
+            try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            try router.extract(archive: resolved, entries: [entry.path],
+                               to: tempDir, password: password)
+            let extracted = tempDir.appendingPathComponent(entry.path)
+            // Finder pre-creates the destination file for a promise;
+            // remove it first so the move does not fail with "exists".
+            if fm.fileExists(atPath: url.path) {
+                try fm.removeItem(at: url)
+            }
+            try fm.moveItem(at: extracted, to: url)
+            completionHandler(nil)
+        } catch {
+            completionHandler(error)
+        }
+    }
+}
+
+/// Native Quick Look (QLPreviewPanel) for one entry: the entry is
+/// streamed to a temp file, then the system panel shows it (images,
+/// PDFs, text — whatever the system can preview, including archives
+/// via SeekZip's own Quick Look extension). Triggered from the
+/// context menu and the Archive menu, never by Space (Space is the
+/// inline text preview). The panel is shown programmatically, so the
+/// responder-chain `acceptsPreviewPanelControl` dance is not needed.
+final class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
+    static let shared = QuickLookController()
+    private var itemURL: URL?
+
+    func show(url: URL) {
+        itemURL = url
+        let panel = QLPreviewPanel.shared()
+        panel.dataSource = self
+        panel.delegate = self
+        panel.reloadData()
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
+        itemURL == nil ? 0 : 1
+    }
+
+    func previewPanel(_ panel: QLPreviewPanel!, previewItemAt index: Int) -> QLPreviewItem! {
+        guard let itemURL else { return nil }
+        let item: QLPreviewItem = itemURL as NSURL
+        return item
+    }
 }
 
 struct BrowserView: View {
@@ -431,11 +600,20 @@ struct BrowserView: View {
                 .onHover { hovering in
                     if hovering { selection = [entry.path] }
                 }
+                // Drag out to Finder: the entry is promised, not
+                // copied up front — Finder asks for its bytes only
+                // when the drop lands (see DragOutPromiseDelegate).
+                .onDrag {
+                    guard let archiveURL else { return NSItemProvider() }
+                    return dragItemProvider(for: entry, archiveURL: archiveURL)
+                }
                 // Right-click menu: the same actions as the toolbar,
                 // for the row under the cursor.
                 .contextMenu {
                     Button("Open") { selection = [entry.path]; openSelected(entry) }
                     Button("Preview") { selection = [entry.path]; togglePreview() }
+                    Button("Quick Look") { selection = [entry.path]; quickLookSelected() }
+                        .disabled(entry.isDirectory)
                     Button("Extract Selected") { selection = [entry.path]; extractSelected() }
                     Button("Copy Path") { copyEntryPath(entry) }
                     Divider()
@@ -522,6 +700,7 @@ struct BrowserView: View {
         .onReceive(NotificationCenter.default.publisher(for: .seekZipConvertRequest)) { _ in convertArchive() }
         .onReceive(NotificationCenter.default.publisher(for: .seekZipAddFilesRequest)) { _ in addFiles() }
         .onReceive(NotificationCenter.default.publisher(for: .seekZipRemoveSelectedRequest)) { _ in removeSelected() }
+        .onReceive(NotificationCenter.default.publisher(for: .seekZipQuickLookRequest)) { _ in quickLookSelected() }
     }
 
     /// M4: the queue panel. Jobs are persisted by `JobQueue`, so this
@@ -838,69 +1017,73 @@ struct BrowserView: View {
     }
 
     /// Open one entry in its default app: stream its bytes to a temp
-    /// file and hand it to the workspace. Nested entries walk the
-    /// chain first — each level's archive file is an entry in the
-    /// previous level, streamed out the same way. Temp files stay in
-    /// the temp dir (the OS purges them); the opened app may keep the
-    /// file open, so they are not deleted on quit.
+    /// file and hand it to the workspace. The streaming runs in a
+    /// detached task (off the main actor) and writes chunk by chunk
+    /// to disk, so a huge file neither freezes the UI nor sits whole
+    /// in RAM — the old version accumulated a `Data` on the main
+    /// actor. Also fixed here: the old version streamed with
+    /// `password: nil`, so entries from a password-protected archive
+    /// could never open; the stored password is used now.
     private func openEntryInDefaultApp(_ entry: ArchiveEntry) {
         guard let archiveURL else { return }
+        let nested = nestedPath
+        let password = PasswordStore.shared.password(for: archiveURL.path)
         Task {
             do {
-                guard let router = engineSettings.makeRouter() else {
-                    status = "No engine available"
-                    return
-                }
-                let fm = FileManager.default
-                var tempDir: URL?
-                var currentArchive = archiveURL
-                for nestedEntry in nestedPath {
-                    var data = Data()
-                    let ok = try router.streamEntry(archive: currentArchive,
-                                                    entry: nestedEntry,
-                                                    password: nil) { chunk in
-                        data.append(chunk)
-                        return true
-                    }
-                    guard ok else {
-                        status = "Cannot open \(entry.path): nested archive is empty"
-                        return
-                    }
-                    if tempDir == nil {
-                        tempDir = fm.temporaryDirectory
-                            .appendingPathComponent("seekzip-open-\(UUID().uuidString)")
-                        try fm.createDirectory(at: tempDir!, withIntermediateDirectories: true)
-                    }
-                    let nestedURL = tempDir!
-                        .appendingPathComponent(URL(fileURLWithPath: nestedEntry).lastPathComponent)
-                    try data.write(to: nestedURL)
-                    currentArchive = nestedURL
-                }
-                var data = Data()
-                let ok = try router.streamEntry(archive: currentArchive,
-                                                entry: entry.path,
-                                                password: nil) { chunk in
-                    data.append(chunk)
-                    return true
-                }
-                guard ok else {
-                    status = "Cannot open \(entry.path)"
-                    return
-                }
-                if tempDir == nil {
-                    tempDir = fm.temporaryDirectory
-                        .appendingPathComponent("seekzip-open-\(UUID().uuidString)")
-                    try fm.createDirectory(at: tempDir!, withIntermediateDirectories: true)
-                }
-                let base = entry.path.split(separator: "/").last.map(String.init) ?? entry.path
-                let dest = tempDir!.appendingPathComponent(base)
-                try data.write(to: dest)
+                let dest = try await Task.detached(priority: .userInitiated) {
+                    try streamEntryToTempFile(archiveURL: archiveURL,
+                                              nestedPath: nested,
+                                              entry: entry, password: password)
+                }.value
                 _ = NSWorkspace.shared.open(dest)
                 status = "Opened \(entry.path)"
             } catch {
                 status = "Cannot open \(entry.path): \(error)"
             }
         }
+    }
+
+    /// Quick Look the selected entry in the system panel (images,
+    /// PDFs, text, archives — whatever the system can preview).
+    /// Files only: a directory has no single file to show. The entry
+    /// is streamed to a temp file first (see `openEntryInDefaultApp`
+    /// for why the streaming is detached and chunked).
+    private func quickLookSelected() {
+        guard let archiveURL,
+              let path = selection.first,
+              let entry = info?.entries.first(where: { $0.path == path }),
+              !entry.isDirectory else { return }
+        let nested = nestedPath
+        let password = PasswordStore.shared.password(for: archiveURL.path)
+        Task {
+            do {
+                let url = try await Task.detached(priority: .userInitiated) {
+                    try streamEntryToTempFile(archiveURL: archiveURL,
+                                              nestedPath: nested,
+                                              entry: entry, password: password)
+                }.value
+                QuickLookController.shared.show(url: url)
+            } catch {
+                status = "Quick Look failed: \(error)"
+            }
+        }
+    }
+
+    /// Build the drag-out item for one row: a file promise whose
+    /// content the delegate produces when the drop lands. Directories
+    /// promise a folder; files promise their own type (by extension).
+    private func dragItemProvider(for entry: ArchiveEntry, archiveURL: URL) -> NSItemProvider {
+        let fileType: String
+        if entry.isDirectory {
+            fileType = "public.folder"
+        } else {
+            fileType = UTType(filenameExtension: URL(fileURLWithPath: entry.name).pathExtension)?.identifier
+                ?? "public.data"
+        }
+        let delegate = DragOutPromiseDelegate(
+            archiveURL: archiveURL, nestedPath: nestedPath, entry: entry,
+            password: PasswordStore.shared.password(for: archiveURL.path))
+        return NSItemProvider(object: NSFilePromiseProvider(fileType: fileType, delegate: delegate))
     }
 
     /// Drag & drop in (Finder → SeekZip): resolve the dropped file
