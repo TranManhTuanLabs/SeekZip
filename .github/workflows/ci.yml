@@ -76,7 +76,7 @@ jobs:
       - name: Build app (unsigned)
         run: |
           set -o pipefail
-          xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived | xcbeautify
+          xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} -derivedDataPath .build/xcode-derived | xcbeautify
 
       - name: Zip app
         run: |
