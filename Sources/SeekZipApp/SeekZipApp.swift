@@ -201,10 +201,22 @@ struct SettingsView: View {
 
     var body: some View {
         TabView {
-            EngineSettingsView(settings: settings)
-                .tabItem { Label("Engines", systemImage: "gearshape") }
-            AboutView()
-                .tabItem { Label("About", systemImage: "info.circle") }
+            // Both tabs scroll, so nothing is ever clipped in
+            // the fixed-size popover. The About tab keeps its
+            // centered layout via minHeight: when the content
+            // fits, the spacers center it; when it grows, the
+            // tab scrolls instead of clipping.
+            ScrollView {
+                EngineSettingsView(settings: settings)
+            }
+            .tabItem { Label("Engines", systemImage: "gearshape") }
+            GeometryReader { geo in
+                ScrollView {
+                    AboutView()
+                        .frame(minHeight: geo.size.height)
+                }
+            }
+            .tabItem { Label("About", systemImage: "info.circle") }
         }
         // Fixed size, not a minimum: both tabs share it, so the
         // popover never jumps or resizes when switching tabs.
@@ -256,7 +268,7 @@ struct GitHubMarkShape: Shape {
 /// shows it so a test can be tied to the exact build that is
 /// running: every build reports the same 0.2.0 version, so the
 /// version alone cannot tell two builds apart.
-private let seekZipBuildStamp = "2026-11-08 22:13 +07"
+private let seekZipBuildStamp = "2026-11-08 22:46 +07"
 
 /// About: what SeekZip is, its version, and where its source lives.
 /// Centered like a macOS About panel — the old left-aligned block
@@ -475,10 +487,6 @@ struct BrowserView: View {
     @State private var archiveURL: URL?
     @State private var info: ArchiveInfo?
     @State private var selection = Set<String>()
-    /// The path of the row the mouse is currently over, if any.
-    /// Drives the hover border ONLY — it never touches the
-    /// selection (see the note on the row's `.onHover`).
-    @State private var hoveredPath: String?
     @State private var status = "Open an archive to begin (⌘O)"
     @State private var filter = ""
     @State private var sortOrder = EntrySortOrder.archive
@@ -604,46 +612,12 @@ struct BrowserView: View {
             // selects on the first tap and this fires on the
             // second — single click stays reliable.
             .simultaneousGesture(TapGesture(count: 2).onEnded { _ in openSelected(entry) })
-            // Hover shows a border only — it never touches the
-            // selection. The old hover moved the selection
-            // while browsing, but that mutated the selection
-            // (and re-rendered the row) right as the user
-            // clicked, so clicks landed only sometimes.
-            // Selection now changes only on click and arrow
-            // keys, like Finder/Keka/BetterZip; the preview
-            // follows that selection. The border is driven by
-            // a separate `hoveredPath` state, so hovering never
-            // mutates the selection — but the border shape
-            // itself still sat on top of the row and swallowed
-            // clicks landing on its ring, so the List never
-            // selected the row. `.allowsHitTesting(false)` on
-            // the overlay shape did not stop that, so the
-            // border is now a background shape whose opacity
-            // toggles (see below) — behind the content and
-            // never added or removed, so it cannot disturb
-            // the List's click handling at all.
-            .onHover { hovering in
-                hoveredPath = hovering ? entry.path : nil
-            }
-            // Border on hover — only when the row is not
-            // already selected (the selected row already has
-            // its own highlight, and two highlights would
-            // look busy). Drawn as a background, not an
-            // overlay, and always rendered with its opacity
-            // toggled: an overlay shape on top of the row
-            // swallowed clicks landing on its ring even with
-            // `.allowsHitTesting(false)`, and adding/removing
-            // the shape on hover re-rendered the row right as
-            // the click landed. A background shape behind the
-            // (transparent) row content can never be frontmost,
-            // and an opacity change leaves the view tree
-            // untouched, so clicks reach the List either way.
-            .background {
-                RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
-                    .opacity(hoveredPath == entry.path && !selection.contains(entry.path) ? 1 : 0)
-                    .allowsHitTesting(false)
-            }
+            // No hover visual: a hover border was tried (first as
+            // an overlay, then as a background shape) and kept
+            // breaking single-click selection, so the owner had
+            // it removed outright. Selection changes only on
+            // click and arrow keys, like Finder/Keka/BetterZip,
+            // and the selected row keeps the List's own highlight.
             // Drag out to Finder: the entry is promised, not
             // copied up front — Finder asks for its bytes only
             // when the drop lands (see `dragItemProvider`).
