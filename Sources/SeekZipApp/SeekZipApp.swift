@@ -603,8 +603,12 @@ struct BrowserView: View {
             // Selection now changes only on click and arrow
             // keys, like Finder/Keka/BetterZip; the preview
             // follows that selection. The border is driven by
-            // a separate `hoveredPath` state, so it cannot
-            // disturb the List's own click handling.
+            // a separate `hoveredPath` state, so hovering never
+            // mutates the selection — but the border shape
+            // itself still sat on top of the row and swallowed
+            // clicks landing on its ring, so the List never
+            // selected the row. `.allowsHitTesting(false)` on
+            // the shape below makes it purely visual.
             .onHover { hovering in
                 hoveredPath = hovering ? entry.path : nil
             }
@@ -616,6 +620,7 @@ struct BrowserView: View {
                 if hoveredPath == entry.path && !selection.contains(entry.path) {
                     RoundedRectangle(cornerRadius: 6)
                         .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                        .allowsHitTesting(false)
                 }
             }
             // Drag out to Finder: the entry is promised, not
