@@ -505,7 +505,7 @@ struct BrowserView: View {
         .overlay {
             if dropTargeted {
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(.accentColor, lineWidth: 2)
+                    .stroke(Color.accentColor, lineWidth: 2)
                     .padding(4)
             }
         }
@@ -914,7 +914,7 @@ struct BrowserView: View {
         let collector = URLCollector()
         for provider in fileProviders {
             group.enter()
-            provider.loadObject(ofClass: URL.self) { url, _ in
+            _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 if let url { collector.append(url) }
                 group.leave()
             }
