@@ -252,6 +252,12 @@ struct GitHubMarkShape: Shape {
         return path.applying(CGAffineTransform(scaleX: scale, y: scale).concatenating(CGAffineTransform(translationX: dx, y: dy)))
     }
 }
+/// Build stamp — updated on every [build-app] commit. The About tab
+/// shows it so a test can be tied to the exact build that is
+/// running: every build reports the same 0.2.0 version, so the
+/// version alone cannot tell two builds apart.
+private let seekZipBuildStamp = "2026-11-08 22:13 +07"
+
 /// About: what SeekZip is, its version, and where its source lives.
 /// Centered like a macOS About panel — the old left-aligned block
 /// left a big empty area under the text.
@@ -270,6 +276,9 @@ struct AboutView: View {
                 .font(.largeTitle)
                 .fontWeight(.semibold)
             Text("Version \(version)")
+                .foregroundStyle(.secondary)
+            Text("Build \(seekZipBuildStamp)")
+                .font(.caption)
                 .foregroundStyle(.secondary)
             Text("Browse and preview archives before extracting, extract only what you need, and create ZIP and 7z archives — free, native for Apple Silicon.")
                 .font(.callout)
@@ -608,20 +617,32 @@ struct BrowserView: View {
             // itself still sat on top of the row and swallowed
             // clicks landing on its ring, so the List never
             // selected the row. `.allowsHitTesting(false)` on
-            // the shape below makes it purely visual.
+            // the overlay shape did not stop that, so the
+            // border is now a background shape whose opacity
+            // toggles (see below) — behind the content and
+            // never added or removed, so it cannot disturb
+            // the List's click handling at all.
             .onHover { hovering in
                 hoveredPath = hovering ? entry.path : nil
             }
             // Border on hover — only when the row is not
             // already selected (the selected row already has
             // its own highlight, and two highlights would
-            // look busy).
-            .overlay {
-                if hoveredPath == entry.path && !selection.contains(entry.path) {
-                    RoundedRectangle(cornerRadius: 6)
-                        .strokeBorder(Color.accentColor, lineWidth: 1.5)
-                        .allowsHitTesting(false)
-                }
+            // look busy). Drawn as a background, not an
+            // overlay, and always rendered with its opacity
+            // toggled: an overlay shape on top of the row
+            // swallowed clicks landing on its ring even with
+            // `.allowsHitTesting(false)`, and adding/removing
+            // the shape on hover re-rendered the row right as
+            // the click landed. A background shape behind the
+            // (transparent) row content can never be frontmost,
+            // and an opacity change leaves the view tree
+            // untouched, so clicks reach the List either way.
+            .background {
+                RoundedRectangle(cornerRadius: 6)
+                    .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                    .opacity(hoveredPath == entry.path && !selection.contains(entry.path) ? 1 : 0)
+                    .allowsHitTesting(false)
             }
             // Drag out to Finder: the entry is promised, not
             // copied up front — Finder asks for its bytes only
