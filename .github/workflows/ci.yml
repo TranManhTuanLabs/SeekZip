@@ -50,10 +50,11 @@ jobs:
 
   build-app:
     # Test build, on demand: only runs when the commit message contains
-    # [build-app]. Builds the app (unsigned) with the engines bundled
-    # and uploads SeekZip.app as a downloadable artifact, so the app
-    # can be tested without installing Xcode locally. Only runs after
-    # build-and-test passes.
+    # [build-app]. Builds the app (unsigned, Release) with the engines
+    # bundled, packages it as a zip (ditto keeps the .app bundle intact,
+    # like TransPeek does), and uploads the zip as a downloadable
+    # artifact, so the app can be tested without installing Xcode
+    # locally. Only runs after build-and-test passes.
     if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-app]')
     needs: build-and-test
     runs-on: macos-15
@@ -67,11 +68,15 @@ jobs:
         run: bash scripts/package-engines.sh
 
       - name: Build app (unsigned)
-        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Debug build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived
+        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived
+
+      - name: Zip app
+        run: |
+          ditto -c -k --keepParent .build/xcode-derived/Build/Products/Release/SeekZip.app SeekZip-macOS.zip
 
       - name: Upload app
         uses: actions/upload-artifact@v4
         with:
-          name: SeekZip-app
-          path: .build/xcode-derived/Build/Products/Debug/SeekZip.app
+          name: SeekZip-macOS
+          path: SeekZip-macOS.zip
           retention-days: 30
