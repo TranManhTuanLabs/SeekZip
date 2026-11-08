@@ -363,9 +363,15 @@ func extractEntryToTemp(archiveURL: URL, nestedPath: [String],
 final class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = QuickLookController()
     private var itemURL: URL?
+    /// The archive-relative path of the entry currently shown (or
+    /// being shown). Only trusted together with `isVisible`, so a
+    /// stale path after the panel closes cannot block a later
+    /// Quick Look.
+    private var shownEntryPath: String?
 
-    func show(url: URL) {
+    func show(url: URL, entryPath: String) {
         itemURL = url
+        shownEntryPath = entryPath
         // shared() returns an optional in the current SDK — unwrap
         // it; if there is no panel (headless run), there is nothing
         // to show.
@@ -374,6 +380,14 @@ final class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPa
         panel.delegate = self
         panel.reloadData()
         panel.makeKeyAndOrderFront(nil)
+    }
+
+    /// True when the panel is currently visible showing this entry —
+    /// used to ignore repeat triggers (e.g. a held Space key) that
+    /// would otherwise re-extract the same entry over and over.
+    func isShowing(entryPath: String) -> Bool {
+        guard let panel = QLPreviewPanel.shared(), panel.isVisible else { return false }
+        return shownEntryPath == entryPath
     }
 
     func numberOfPreviewItems(in panel: QLPreviewPanel!) -> Int {
@@ -556,18 +570,14 @@ struct BrowserView: View {
         }
         // Space opens Quick Look for the selected entry (the
         // native QLPreviewPanel, same as the context-menu
-        // Quick Look) — Finder-style. Only the key-down counts:
-        // holding Space repeats the event, and a repeat must
-        // not re-trigger the extraction behind the panel.
-        // NOTE: the single-key `.onKeyPress(.space)` variant
-        // passes NO argument to its closure — the KeyPress
-        // value (with `.phase`) is only delivered by the Set
-        // form below. (Using `{ press in` with `.space`
-        // fails to compile.)
-        // The inline text preview is still on the context
-        // menu ("Preview") and follows the selection while open.
-        .onKeyPress([.space]) { press in
-            guard press.phase == .down else { return .ignored }
+        // Quick Look) — Finder-style. The single-key form
+        // takes no argument, so repeats from a held key are
+        // filtered inside `quickLookSelected()` instead (it
+        // ignores the trigger while the panel already shows
+        // this entry). The inline text preview is still on
+        // the context menu ("Preview") and follows the
+        // selection while open.
+        .onKeyPress(.space) {
             quickLookSelected()
             return .handled
         }
@@ -1143,6 +1153,13 @@ struct BrowserView: View {
               let path = selection.first,
               let entry = info?.entries.first(where: { $0.path == path }),
               !entry.isDirectory else { return }
+        // A held Space key repeats the event: ignore it while the
+        // panel is already showing this entry, so the entry is not
+        // re-extracted over and over. (The KeyPress value that
+        // would let us filter repeats is not available from
+        // `onKeyPress` in this SDK — the single-key form takes
+        // no argument and there is no Set form.)
+        if QuickLookController.shared.isShowing(entryPath: entry.path) { return }
         let nested = nestedPath
         let password = PasswordStore.shared.password(for: archiveURL.path)
         Task {
@@ -1152,7 +1169,7 @@ struct BrowserView: View {
                                               nestedPath: nested,
                                               entry: entry, password: password)
                 }.value
-                QuickLookController.shared.show(url: url)
+                QuickLookController.shared.show(url: url, entryPath: entry.path)
             } catch {
                 status = "Quick Look failed: \(error)"
             }
