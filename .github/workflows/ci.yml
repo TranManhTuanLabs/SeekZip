@@ -1,4 +1,8 @@
 name: CI
+# xcodebuild output is piped through xcbeautify so CI logs stay readable:
+# full test results are kept while compile noise is dropped. Do NOT filter
+# logs to errors only: failing tests show as "recorded an issue" lines, not
+# "error" lines, and warnings can be clues.
 
 on:
   push:
@@ -12,13 +16,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install 7-Zip engine
-        run: brew install sevenzip unar
+        run: brew install sevenzip unar xcbeautify
 
       - name: Build (core, CLI, MCP, app)
         run: swift build
 
       - name: Build Xcode project (app + extensions, unsigned)
-        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Debug build CODE_SIGNING_ALLOWED=NO
+        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Debug build CODE_SIGNING_ALLOWED=NO | xcbeautify
 
       - name: Unit tests
         run: swift test
@@ -62,13 +66,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install 7-Zip engine
-        run: brew install sevenzip unar
+        run: brew install sevenzip unar xcbeautify
 
       - name: Stage engines into build/Helpers
         run: bash scripts/package-engines.sh
 
       - name: Build app (unsigned)
-        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived
+        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived | xcbeautify
 
       - name: Zip app
         run: |
