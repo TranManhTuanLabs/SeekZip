@@ -505,6 +505,13 @@ struct BrowserView: View {
                         .foregroundStyle(.secondary)
                 }
                 .tag(entry.path)
+                // The whole row is the hit target, not just the
+                // text: without a content shape, SwiftUI only
+                // hit-tests the text and icons, so double-clicking
+                // the empty space between the name (left) and the
+                // CRC/size (right) did nothing. This also makes
+                // hover-select and drag-out work across the row.
+                .contentShape(Rectangle())
                 // Double-click opens: drill into a nested archive,
                 // open a file in its default app (folders do nothing
                 // — the list is flat, there is no folder to enter).
@@ -604,41 +611,48 @@ struct BrowserView: View {
                 Button { openArchive() } label: {
                     Label("Open Archive", systemImage: "folder")
                 }
+                .help("Open an archive…")
             }
             ToolbarItem(placement: .navigation) {
                 Button { createNewArchive() } label: {
                     Label("New Archive", systemImage: "doc.badge.plus")
                 }
+                .help("Create a new archive…")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { extractSelected() } label: {
                     Label("Extract", systemImage: "square.and.arrow.down")
                 }
                 .disabled(selection.isEmpty)
+                .help("Extract the selected entries")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { addFiles() } label: {
                     Label("Add Files", systemImage: "plus.square")
                 }
                 .disabled(archiveURL == nil)
+                .help("Add files to this archive")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { quickLookSelected() } label: {
                     Label("Quick Look", systemImage: "eye")
                 }
                 .disabled(selection.isEmpty)
+                .help("Quick Look the selected entry")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { verifyArchive() } label: {
                     Label("Verify", systemImage: "checkmark.shield")
                 }
                 .disabled(archiveURL == nil)
+                .help("Verify the archive's integrity")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { convertArchive() } label: {
                     Label("Convert", systemImage: "arrow.triangle.2.circlepath")
                 }
                 .disabled(archiveURL == nil)
+                .help("Convert this archive to another format")
             }
             ToolbarItem(placement: .primaryAction) {
                 Picker("Sort", selection: $sortOrder) {
@@ -653,6 +667,7 @@ struct BrowserView: View {
                 Button { showSettings = true } label: {
                     Label("Settings", systemImage: "gearshape")
                 }
+                .help("Settings")
                 // Settings is a popover, not a sheet: a popover
                 // dismisses when the user clicks outside it (or
                 // presses Esc), so Settings never traps the user
