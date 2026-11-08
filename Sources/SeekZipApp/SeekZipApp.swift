@@ -405,6 +405,10 @@ struct BrowserView: View {
     @State private var archiveURL: URL?
     @State private var info: ArchiveInfo?
     @State private var selection = Set<String>()
+    /// The path of the row the mouse is currently over, if any.
+    /// Drives the hover border ONLY — it never touches the
+    /// selection (see the note on the row's `.onHover`).
+    @State private var hoveredPath: String?
     @State private var status = "Open an archive to begin (⌘O)"
     @State private var filter = ""
     @State private var sortOrder = EntrySortOrder.archive
@@ -523,14 +527,29 @@ struct BrowserView: View {
             // open a file in its default app (folders do nothing
             // — the list is flat, there is no folder to enter).
             .onTapGesture(count: 2) { openSelected(entry) }
-            // NOTE: no `.onHover` selection here, on purpose.
-            // Hover used to move the selection while browsing,
-            // but that mutated the selection (and re-rendered
-            // the row) right as the user clicked, so clicks
-            // landed only sometimes — the redraw could swallow
-            // the click. Selection now changes only on click
-            // and arrow keys, like Finder/Keka/BetterZip; the
-            // preview follows that selection.
+            // Hover shows a border only — it never touches the
+            // selection. The old hover moved the selection
+            // while browsing, but that mutated the selection
+            // (and re-rendered the row) right as the user
+            // clicked, so clicks landed only sometimes.
+            // Selection now changes only on click and arrow
+            // keys, like Finder/Keka/BetterZip; the preview
+            // follows that selection. The border is driven by
+            // a separate `hoveredPath` state, so it cannot
+            // disturb the List's own click handling.
+            .onHover { hovering in
+                hoveredPath = hovering ? entry.path : nil
+            }
+            // Border on hover — only when the row is not
+            // already selected (the selected row already has
+            // its own highlight, and two highlights would
+            // look busy).
+            .overlay {
+                if hoveredPath == entry.path && !selection.contains(entry.path) {
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(Color.accentColor, lineWidth: 1.5)
+                }
+            }
             // Drag out to Finder: the entry is promised, not
             // copied up front — Finder asks for its bytes only
             // when the drop lands (see `dragItemProvider`).
