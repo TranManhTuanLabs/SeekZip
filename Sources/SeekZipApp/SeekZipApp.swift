@@ -183,7 +183,6 @@ struct EngineSettingsView: View {
                 Button("Reset overrides") { settings.formatOverrides = [:] }
             }
         }
-        .frame(minWidth: 420, minHeight: 320)
     }
 
     private func binding(for format: String) -> Binding<EngineID?> {
@@ -207,30 +206,46 @@ struct SettingsView: View {
             AboutView()
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(minWidth: 460, minHeight: 380)
+        // Fixed size, not a minimum: both tabs share it, so the
+        // popover never jumps or resizes when switching tabs.
+        .frame(width: 480, height: 420)
     }
 }
 
 /// About: what SeekZip is, its version, and where its source lives.
+/// Centered like a macOS About panel — the old left-aligned block
+/// left a big empty area under the text.
 struct AboutView: View {
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(spacing: 10) {
+            Spacer()
+            Image(systemName: "archivebox.fill")
+                .font(.system(size: 48))
+                .foregroundStyle(Color.accentColor)
             Text("SeekZip")
                 .font(.largeTitle)
+                .fontWeight(.semibold)
             Text("Version \(version)")
                 .foregroundStyle(.secondary)
             Text("Browse and preview archives before extracting, extract only what you need, and create ZIP and 7z archives — free, native for Apple Silicon.")
-            Link("SeekZip on GitHub", destination: URL(string: "https://github.com/TranManhTuanLabs/SeekZip")!)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 24)
+            Link(destination: URL(string: "https://github.com/TranManhTuanLabs/SeekZip")!) {
+                Label("SeekZip on GitHub", systemImage: "link")
+            }
             Text("Free and open source. Report issues and request features on GitHub.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding()
     }
 }
@@ -526,7 +541,14 @@ struct BrowserView: View {
             // Double-click opens: drill into a nested archive,
             // open a file in its default app (folders do nothing
             // — the list is flat, there is no folder to enter).
-            .onTapGesture(count: 2) { openSelected(entry) }
+            // A simultaneous gesture, not an exclusive tap
+            // gesture: an exclusive `.onTapGesture(count: 2)`
+            // claimed the touch stream and starved the List's
+            // own selection tap, so single clicks landed only
+            // sometimes. With a simultaneous gesture the List
+            // selects on the first tap and this fires on the
+            // second — single click stays reliable.
+            .simultaneousGesture(TapGesture(count: 2).onEnded { _ in openSelected(entry) })
             // Hover shows a border only — it never touches the
             // selection. The old hover moved the selection
             // while browsing, but that mutated the selection
