@@ -517,20 +517,20 @@ struct BrowserView: View {
             // hit-tests the text and icons, so double-clicking
             // the empty space between the name (left) and the
             // CRC/size (right) did nothing. This also makes
-            // hover-select and drag-out work across the row.
+            // drag-out work across the row.
             .contentShape(Rectangle())
             // Double-click opens: drill into a nested archive,
             // open a file in its default app (folders do nothing
             // — the list is flat, there is no folder to enter).
             .onTapGesture(count: 2) { openSelected(entry) }
-            // Hover selects the row only while nothing is
-            // selected yet, so the preview follows the mouse
-            // while browsing — but once the user has clicked a
-            // file, moving the mouse over other rows must not
-            // yank the selection (and the preview) away.
-            .onHover { hovering in
-                if hovering && selection.isEmpty { selection = [entry.path] }
-            }
+            // NOTE: no `.onHover` selection here, on purpose.
+            // Hover used to move the selection while browsing,
+            // but that mutated the selection (and re-rendered
+            // the row) right as the user clicked, so clicks
+            // landed only sometimes — the redraw could swallow
+            // the click. Selection now changes only on click
+            // and arrow keys, like Finder/Keka/BetterZip; the
+            // preview follows that selection.
             // Drag out to Finder: the entry is promised, not
             // copied up front — Finder asks for its bytes only
             // when the drop lands (see `dragItemProvider`).
@@ -590,8 +590,8 @@ struct BrowserView: View {
             }
             return .handled
         }
-        // Preview follows the selection (mouse hover/click or
-        // arrow keys) while the preview panel is open.
+        // Preview follows the selection (click or arrow keys)
+        // while the preview panel is open.
         // (Zero-parameter form: the one-parameter `onChange`
         // action is deprecated in macOS 14.)
         .onChange(of: selection) {
@@ -929,7 +929,7 @@ struct BrowserView: View {
 
     /// Load (or reload) the preview for the current selection, without
     /// toggling the panel — used when the selection moves while the
-    /// panel is already open (hover, click, arrow keys).
+    /// panel is already open (click, arrow keys).
     private func loadPreview() {
         guard let archiveURL,
               let selected = selection.first,
