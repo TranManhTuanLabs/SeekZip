@@ -331,60 +331,25 @@ func streamEntryToTempFile(archiveURL: URL, nestedPath: [String],
                               fileName: entry.name, in: tempDir)
 }
 
-/// Drag-out (SeekZip → Finder): a file promise whose content is
-/// produced on demand. Finder calls `writePromiseTo` on a background
-/// queue when the drop lands; the delegate extracts the entry
-/// (walking the nested chain first) and moves it to the promised URL.
-/// The provider retains the delegate until the promise completes, so
-/// no extra lifetime management is needed. `extract` (not streaming)
-/// is used because it handles directory entries too — a promised
-/// folder is extracted as a whole subtree and moved as one item.
-final class DragOutPromiseDelegate: NSObject, NSFilePromiseProviderDelegate {
-    private let archiveURL: URL
-    private let nestedPath: [String]
-    private let entry: ArchiveEntry
-    private let password: String?
-
-    init(archiveURL: URL, nestedPath: [String], entry: ArchiveEntry, password: String?) {
-        self.archiveURL = archiveURL
-        self.nestedPath = nestedPath
-        self.entry = entry
-        self.password = password
+/// Extract one entry (a file, or a whole directory subtree) to a
+/// fresh temp dir and return the extracted item's URL. Used by
+/// drag-out: Finder asks for the file only when the drop lands, so
+/// nothing is copied up front.
+func extractEntryToTemp(archiveURL: URL, nestedPath: [String],
+                        entry: ArchiveEntry, password: String?) throws -> URL {
+    let resolved = try resolveNestedArchive(archiveURL: archiveURL,
+                                            nestedPath: nestedPath,
+                                            password: password)
+    guard let router = EngineSettings.shared.makeRouter() else {
+        throw EngineError.failed(exitCode: 3, message: "No engine available")
     }
-
-    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider,
-                             fileNameForType fileType: String) -> String {
-        entry.name
-    }
-
-    func filePromiseProvider(_ filePromiseProvider: NSFilePromiseProvider,
-                             writePromiseTo url: URL,
-                             completionHandler: @escaping (Error?) -> Void) {
-        do {
-            let resolved = try resolveNestedArchive(archiveURL: archiveURL,
-                                                    nestedPath: nestedPath,
-                                                    password: password)
-            guard let router = EngineSettings.shared.makeRouter() else {
-                throw EngineError.failed(exitCode: 3, message: "No engine available")
-            }
-            let fm = FileManager.default
-            let tempDir = fm.temporaryDirectory
-                .appendingPathComponent("seekzip-drag-\(UUID().uuidString)")
-            try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
-            try router.extract(archive: resolved, entries: [entry.path],
-                               to: tempDir, password: password)
-            let extracted = tempDir.appendingPathComponent(entry.path)
-            // Finder pre-creates the destination file for a promise;
-            // remove it first so the move does not fail with "exists".
-            if fm.fileExists(atPath: url.path) {
-                try fm.removeItem(at: url)
-            }
-            try fm.moveItem(at: extracted, to: url)
-            completionHandler(nil)
-        } catch {
-            completionHandler(error)
-        }
-    }
+    let fm = FileManager.default
+    let tempDir = fm.temporaryDirectory
+        .appendingPathComponent("seekzip-drag-\(UUID().uuidString)")
+    try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    try router.extract(archive: resolved, entries: [entry.path],
+                       to: tempDir, password: password)
+    return tempDir.appendingPathComponent(entry.path)
 }
 
 /// Native Quick Look (QLPreviewPanel) for one entry: the entry is
@@ -400,7 +365,10 @@ final class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPa
 
     func show(url: URL) {
         itemURL = url
-        let panel = QLPreviewPanel.shared()
+        // shared() returns an optional in the current SDK — unwrap
+        // it; if there is no panel (headless run), there is nothing
+        // to show.
+        guard let panel = QLPreviewPanel.shared() else { return }
         panel.dataSource = self
         panel.delegate = self
         panel.reloadData()
@@ -484,76 +452,22 @@ struct BrowserView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Rename row: the only inline editing control left at the
+            // top. Every other action lives in the native toolbar
+            // (`.toolbar` on this VStack), the menu bar, or the
+            // context menu, so the top of the window is one clean
+            // strip instead of two rows of plain buttons.
             HStack {
-                Button("Open Archive…") { openArchive() }
-                TextField("Filter entries", text: $filter)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 200)
-                Picker("Sort", selection: $sortOrder) {
-                    ForEach(EntrySortOrder.allCases, id: \.self) { order in
-                        Text(order.rawValue).tag(order)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(maxWidth: 140)
-                Spacer()
-                // Settings: engine picker + About (with GitHub link).
-                Button("Settings…") { showSettings = true }
-                Button("Extract Selected") { extractSelected() }
-                    .disabled(selection.isEmpty)
-            }
-            .padding(8)
-            .sheet(isPresented: $showSettings) {
-                SettingsView(settings: engineSettings)
-            }
-            .sheet(isPresented: $showPasswordPrompt) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Password required").font(.headline)
-                    Text(pendingPasswordURL?.lastPathComponent ?? "This archive")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    if passwordPromptWrong {
-                        Text("Wrong password — try again.")
-                            .foregroundStyle(.red)
-                            .font(.footnote)
-                    }
-                    SecureField("Password", text: $passwordInput)
-                        .textFieldStyle(.roundedBorder)
-                    Text("The password is saved in your Keychain for this archive, so previews and extracts work without asking again.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack {
-                        Spacer()
-                        Button("Cancel") { showPasswordPrompt = false; passwordInput = "" }
-                        Button("Open") { submitPassword() }
-                            .keyboardShortcut(.defaultAction)
-                    }
-                }
-                .padding()
-                .frame(minWidth: 320)
-            }
-
-            // M5: edit row — add/remove/rename/convert/verify. All of
-            // these go through the core edit path (temp copy + atomic
-            // replace), so a failed edit never corrupts the archive.
-            HStack {
-                Button("Add Files…") { addFiles() }
-                    .disabled(archiveURL == nil)
-                Button("Remove Selected") { removeSelected() }
-                    .disabled(selection.isEmpty)
                 TextField("New name", text: $renameTo)
                     .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 160)
+                    .frame(maxWidth: 220)
                 Button("Rename") { renameSelected() }
                     .disabled(selection.count != 1 || renameTo.isEmpty)
-                Button("Convert…") { convertArchive() }
-                    .disabled(archiveURL == nil)
-                Button("Verify") { verifyArchive() }
-                    .disabled(archiveURL == nil)
                 Spacer()
             }
             .padding(.horizontal, 8)
-            .padding(.bottom, 4)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
 
             if let verifySummary {
                 Text(verifySummary)
@@ -602,7 +516,7 @@ struct BrowserView: View {
                 }
                 // Drag out to Finder: the entry is promised, not
                 // copied up front — Finder asks for its bytes only
-                // when the drop lands (see DragOutPromiseDelegate).
+                // when the drop lands (see `dragItemProvider`).
                 .onDrag {
                     guard let archiveURL else { return NSItemProvider() }
                     return dragItemProvider(for: entry, archiveURL: archiveURL)
@@ -635,7 +549,9 @@ struct BrowserView: View {
             }
             // Preview follows the selection (mouse hover/click or
             // arrow keys) while the preview panel is open.
-            .onChange(of: selection) { _ in
+            // (Zero-parameter form: the one-parameter `onChange`
+            // action is deprecated in macOS 14.)
+            .onChange(of: selection) {
                 if showPreview { loadPreview() }
             }
 
@@ -675,6 +591,103 @@ struct BrowserView: View {
                 .padding(6)
         }
         .frame(minWidth: 640, minHeight: 420)
+        // The window title is the open archive's name (Finder-like);
+        // the search field lives in the toolbar via `.searchable`.
+        .navigationTitle(archiveURL?.lastPathComponent ?? "SeekZip")
+        .searchable(text: $filter, prompt: "Filter entries")
+        // Native toolbar (replaces the two hand-made button rows):
+        // icon buttons with labels, grouped leading/trailing the
+        // way macOS apps do it. The search field (`.searchable`)
+        // and the sort picker sit in the same strip.
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button { openArchive() } label: {
+                    Label("Open Archive", systemImage: "folder")
+                }
+            }
+            ToolbarItem(placement: .navigation) {
+                Button { createNewArchive() } label: {
+                    Label("New Archive", systemImage: "doc.badge.plus")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { extractSelected() } label: {
+                    Label("Extract", systemImage: "square.and.arrow.down")
+                }
+                .disabled(selection.isEmpty)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { addFiles() } label: {
+                    Label("Add Files", systemImage: "plus.square")
+                }
+                .disabled(archiveURL == nil)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { quickLookSelected() } label: {
+                    Label("Quick Look", systemImage: "eye")
+                }
+                .disabled(selection.isEmpty)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { verifyArchive() } label: {
+                    Label("Verify", systemImage: "checkmark.shield")
+                }
+                .disabled(archiveURL == nil)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { convertArchive() } label: {
+                    Label("Convert", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .disabled(archiveURL == nil)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Picker("Sort", selection: $sortOrder) {
+                    ForEach(EntrySortOrder.allCases, id: \.self) { order in
+                        Text(order.rawValue).tag(order)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { showSettings = true } label: {
+                    Label("Settings", systemImage: "gearshape")
+                }
+                // Settings is a popover, not a sheet: a popover
+                // dismisses when the user clicks outside it (or
+                // presses Esc), so Settings never traps the user
+                // behind a modal that only Esc can close.
+                .popover(isPresented: $showSettings) {
+                    SettingsView(settings: engineSettings)
+                }
+            }
+        }
+        .sheet(isPresented: $showPasswordPrompt) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Password required").font(.headline)
+                Text(pendingPasswordURL?.lastPathComponent ?? "This archive")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                if passwordPromptWrong {
+                    Text("Wrong password — try again.")
+                        .foregroundStyle(.red)
+                        .font(.footnote)
+                }
+                SecureField("Password", text: $passwordInput)
+                    .textFieldStyle(.roundedBorder)
+                Text("The password is saved in your Keychain for this archive, so previews and extracts work without asking again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showPasswordPrompt = false; passwordInput = "" }
+                    Button("Open") { submitPassword() }
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding()
+            .frame(minWidth: 320)
+        }
         // Drag files in from Finder: an archive opens, files are
         // added to the open archive, or start a new archive.
         .onDrop(of: [.fileURL], isTargeted: $dropTargeted) { providers in
@@ -816,13 +829,18 @@ struct BrowserView: View {
     /// M7: the preview goes through the router, so an XAD-only
     /// archive previews via a temporary extraction (core fallback)
     /// instead of failing on the missing 7zz stream.
+    /// Space toggles: pressing it again while the panel is open
+    /// closes the panel (it used to re-open it every time — the
+    /// `showPreview = true` below never turned it off).
     private func togglePreview() {
-        guard let archiveURL,
-              let selected = selection.first,
-              let entry = info?.entries.first(where: { $0.path == selected }) else {
-            showPreview.toggle()
+        if showPreview {
+            showPreview = false
+            preview = nil
             return
         }
+        guard let archiveURL,
+              let selected = selection.first,
+              let entry = info?.entries.first(where: { $0.path == selected }) else { return }
         showPreview = true
         loadPreview(archiveURL: archiveURL, entry: entry)
     }
@@ -1069,9 +1087,14 @@ struct BrowserView: View {
         }
     }
 
-    /// Build the drag-out item for one row: a file promise whose
-    /// content the delegate produces when the drop lands. Directories
-    /// promise a folder; files promise their own type (by extension).
+    /// Build the drag-out item for one row: a file representation
+    /// that Finder loads on demand (when the drop lands). The entry
+    /// is extracted to a temp file only then — nothing is copied up
+    /// front, and a huge file does not block the drag from starting.
+    /// `registerFileRepresentation` is the way to promise a file
+    /// from SwiftUI: `NSFilePromiseProvider` does NOT conform to
+    /// `NSItemProviderWriting`, so it cannot be wrapped in an
+    /// `NSItemProvider` (that was the batch-2 build error).
     private func dragItemProvider(for entry: ArchiveEntry, archiveURL: URL) -> NSItemProvider {
         let fileType: String
         if entry.isDirectory {
@@ -1080,10 +1103,22 @@ struct BrowserView: View {
             fileType = UTType(filenameExtension: URL(fileURLWithPath: entry.name).pathExtension)?.identifier
                 ?? "public.data"
         }
-        let delegate = DragOutPromiseDelegate(
-            archiveURL: archiveURL, nestedPath: nestedPath, entry: entry,
-            password: PasswordStore.shared.password(for: archiveURL.path))
-        return NSItemProvider(object: NSFilePromiseProvider(fileType: fileType, delegate: delegate))
+        let password = PasswordStore.shared.password(for: archiveURL.path)
+        let nested = nestedPath
+        let provider = NSItemProvider()
+        provider.suggestedName = entry.name
+        provider.registerFileRepresentation(forTypeIdentifier: fileType, visibility: .all) { completion in
+            do {
+                let url = try extractEntryToTemp(archiveURL: archiveURL,
+                                                 nestedPath: nested,
+                                                 entry: entry, password: password)
+                completion(url, true, nil)
+            } catch {
+                completion(nil, false, error)
+            }
+            return nil
+        }
+        return provider
     }
 
     /// Drag & drop in (Finder → SeekZip): resolve the dropped file
