@@ -356,9 +356,10 @@ func extractEntryToTemp(archiveURL: URL, nestedPath: [String],
 /// streamed to a temp file, then the system panel shows it (images,
 /// PDFs, text — whatever the system can preview, including archives
 /// via SeekZip's own Quick Look extension). Triggered from the
-/// context menu and the Archive menu, never by Space (Space is the
-/// inline text preview). The panel is shown programmatically, so the
-/// responder-chain `acceptsPreviewPanelControl` dance is not needed.
+/// context menu, the Archive menu, and Space (Finder-style — Space
+/// used to toggle the inline text preview instead). The panel is
+/// shown programmatically, so the responder-chain
+/// `acceptsPreviewPanelControl` dance is not needed.
 final class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPanelDelegate {
     static let shared = QuickLookController()
     private var itemURL: URL?
@@ -516,10 +517,13 @@ struct BrowserView: View {
                 // open a file in its default app (folders do nothing
                 // — the list is flat, there is no folder to enter).
                 .onTapGesture(count: 2) { openSelected(entry) }
-                // Hover selects the row, so the preview (when open)
-                // follows the mouse just like it follows the arrow keys.
+                // Hover selects the row only while nothing is
+                // selected yet, so the preview follows the mouse
+                // while browsing — but once the user has clicked a
+                // file, moving the mouse over other rows must not
+                // yank the selection (and the preview) away.
                 .onHover { hovering in
-                    if hovering { selection = [entry.path] }
+                    if hovering && selection.isEmpty { selection = [entry.path] }
                 }
                 // Drag out to Finder: the entry is promised, not
                 // copied up front — Finder asks for its bytes only
@@ -541,8 +545,16 @@ struct BrowserView: View {
                     Button("Remove Selected", role: .destructive) { selection = [entry.path]; removeSelected() }
                 }
             }
-            .onKeyPress(.space) {
-                togglePreview()
+            // Space opens Quick Look for the selected entry (the
+            // native QLPreviewPanel, same as the context-menu
+            // Quick Look) — Finder-style. Only the key-down counts:
+            // holding Space repeats the event, and a repeat must
+            // not re-trigger the extraction behind the panel.
+            // The inline text preview is still on the context
+            // menu ("Preview") and follows the selection while open.
+            .onKeyPress(.space) { press in
+                guard press.phase == .down else { return .ignored }
+                quickLookSelected()
                 return .handled
             }
             // Return opens the selected entry (same as double-click),
@@ -844,9 +856,11 @@ struct BrowserView: View {
     /// M7: the preview goes through the router, so an XAD-only
     /// archive previews via a temporary extraction (core fallback)
     /// instead of failing on the missing 7zz stream.
-    /// Space toggles: pressing it again while the panel is open
-    /// closes the panel (it used to re-open it every time — the
-    /// `showPreview = true` below never turned it off).
+    /// Toggles the inline panel: pressing it again while the panel
+    /// is open closes the panel (it used to re-open it every time
+    /// — the `showPreview = true` below never turned it off).
+    /// Reached from the context menu ("Preview"); Space now opens
+    /// Quick Look instead.
     private func togglePreview() {
         if showPreview {
             showPreview = false
