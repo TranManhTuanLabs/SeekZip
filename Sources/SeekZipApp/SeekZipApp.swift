@@ -531,6 +531,23 @@ struct BrowserView: View {
                 .onDrag {
                     guard let archiveURL else { return NSItemProvider() }
                     return dragItemProvider(for: entry, archiveURL: archiveURL)
+                } preview: {
+                    // Custom drag preview: the default one snapshots
+                    // the row in its selected state (white text)
+                    // without the selection background, so the name
+                    // came out unreadable white-on-light. An explicit
+                    // chip keeps the text primary-coloured on a
+                    // material background in both light and dark mode.
+                    HStack(spacing: 6) {
+                        Image(systemName: entry.isDirectory ? "folder"
+                            : entry.isArchive ? "archivebox" : "doc")
+                        Text(entry.path)
+                            .lineLimit(1)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .foregroundStyle(.primary)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
                 // Right-click menu: the same actions as the toolbar,
                 // for the row under the cursor.
