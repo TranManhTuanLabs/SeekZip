@@ -22,7 +22,9 @@ jobs:
         run: swift build
 
       - name: Build Xcode project (app + extensions, unsigned)
-        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Debug build CODE_SIGNING_ALLOWED=NO | xcbeautify
+        run: |
+          set -o pipefail
+          xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Debug build CODE_SIGNING_ALLOWED=NO | xcbeautify
 
       - name: Unit tests
         run: swift test
@@ -68,19 +70,19 @@ jobs:
       - name: Install 7-Zip engine
         run: brew install sevenzip unar xcbeautify
 
-      - name: Stage engines into build/Helpers
-        run: bash scripts/package-engines.sh
-
       - name: Build app (unsigned)
-        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived | xcbeautify
+        run: |
+          set -o pipefail
+          xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived | xcbeautify
 
       - name: Zip app
         run: |
+          test -x .build/xcode-derived/Build/Products/Release/SeekZip.app/Contents/MacOS/SeekZip
           ditto -c -k --keepParent .build/xcode-derived/Build/Products/Release/SeekZip.app SeekZip-macOS.zip
 
-      - name: Upload app
+      - name: Upload app zip
         uses: actions/upload-artifact@v4
         with:
           name: SeekZip-macOS
           path: SeekZip-macOS.zip
-          retention-days: 30
+          if-no-files-found: error
