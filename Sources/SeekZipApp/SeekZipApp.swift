@@ -451,24 +451,224 @@ struct BrowserView: View {
         }
     }
 
+    // The body used to be one giant expression (VStack + List +
+    // toolbar + all modifiers), and the Release compiler gave up
+    // type-checking it: "unable to type-check this expression in
+    // reasonable time" (SeekZipApp.swift:454). The big pieces live
+    // in their own declarations now, so each is type-checked on
+    // its own; `body` only assembles them.
+    private var renameRow: some View {
+        // Rename row: the only inline editing control left at the
+        // top. Every other action lives in the native toolbar
+        // (`.toolbar` on this VStack), the menu bar, or the
+        // context menu, so the top of the window is one clean
+        // strip instead of two rows of plain buttons.
+        HStack {
+            TextField("New name", text: $renameTo)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 220)
+            Button("Rename") { renameSelected() }
+                .disabled(selection.count != 1 || renameTo.isEmpty)
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    private var fileList: some View {
+        List(shownEntries, selection: $selection) { entry in
+            HStack {
+                Image(systemName: entry.isDirectory ? "folder"
+                    : entry.isArchive ? "archivebox" : "doc")
+                if entry.isEncrypted {
+                    Image(systemName: "lock.fill")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(entry.path)
+                Spacer()
+                // M5: CRC-32 from the listing (— when the format
+                // does not report one); `verify` re-checks it.
+                Text(entry.crc ?? "—")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Text(ByteCountFormatter.string(fromByteCount: Int64(entry.size),
+                                               countStyle: .file))
+                    .foregroundStyle(.secondary)
+            }
+            .tag(entry.path)
+            // The whole row is the hit target, not just the
+            // text: without a content shape, SwiftUI only
+            // hit-tests the text and icons, so double-clicking
+            // the empty space between the name (left) and the
+            // CRC/size (right) did nothing. This also makes
+            // hover-select and drag-out work across the row.
+            .contentShape(Rectangle())
+            // Double-click opens: drill into a nested archive,
+            // open a file in its default app (folders do nothing
+            // — the list is flat, there is no folder to enter).
+            .onTapGesture(count: 2) { openSelected(entry) }
+            // Hover selects the row only while nothing is
+            // selected yet, so the preview follows the mouse
+            // while browsing — but once the user has clicked a
+            // file, moving the mouse over other rows must not
+            // yank the selection (and the preview) away.
+            .onHover { hovering in
+                if hovering && selection.isEmpty { selection = [entry.path] }
+            }
+            // Drag out to Finder: the entry is promised, not
+            // copied up front — Finder asks for its bytes only
+            // when the drop lands (see `dragItemProvider`).
+            .onDrag {
+                guard let archiveURL else { return NSItemProvider() }
+                return dragItemProvider(for: entry, archiveURL: archiveURL)
+            } preview: {
+                // Custom drag preview: the default one snapshots
+                // the row in its selected state (white text)
+                // without the selection background, so the name
+                // came out unreadable white-on-light. An explicit
+                // chip keeps the text primary-coloured on a
+                // material background in both light and dark mode.
+                HStack(spacing: 6) {
+                    Image(systemName: entry.isDirectory ? "folder"
+                        : entry.isArchive ? "archivebox" : "doc")
+                    Text(entry.path)
+                        .lineLimit(1)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .foregroundStyle(.primary)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+            }
+            // Right-click menu: the same actions as the toolbar,
+            // for the row under the cursor.
+            .contextMenu {
+                Button("Open") { selection = [entry.path]; openSelected(entry) }
+                Button("Preview") { selection = [entry.path]; togglePreview() }
+                Button("Quick Look") { selection = [entry.path]; quickLookSelected() }
+                    .disabled(entry.isDirectory)
+                Button("Extract Selected") { selection = [entry.path]; extractSelected() }
+                Button("Copy Path") { copyEntryPath(entry) }
+                Divider()
+                Button("Remove Selected", role: .destructive) { selection = [entry.path]; removeSelected() }
+            }
+        }
+        // Space opens Quick Look for the selected entry (the
+        // native QLPreviewPanel, same as the context-menu
+        // Quick Look) — Finder-style. Only the key-down counts:
+        // holding Space repeats the event, and a repeat must
+        // not re-trigger the extraction behind the panel.
+        // The inline text preview is still on the context
+        // menu ("Preview") and follows the selection while open.
+        .onKeyPress(.space) { press in
+            guard press.phase == .down else { return .ignored }
+            quickLookSelected()
+            return .handled
+        }
+        // Return opens the selected entry (same as double-click),
+        // so opening is never mouse-only (HIG).
+        .onKeyPress(.return) {
+            if let selected = selection.first,
+               let entry = info?.entries.first(where: { $0.path == selected }) {
+                openSelected(entry)
+            }
+            return .handled
+        }
+        // Preview follows the selection (mouse hover/click or
+        // arrow keys) while the preview panel is open.
+        // (Zero-parameter form: the one-parameter `onChange`
+        // action is deprecated in macOS 14.)
+        .onChange(of: selection) {
+            if showPreview { loadPreview() }
+        }
+    }
+
+    private var statusLine: some View {
+        // M6: the status line names the engine that handled the
+        // archive (`ArchiveInfo.engine`, stamped by the router).
+        Text(status + (info?.engine.map { " · engine: \($0)" } ?? ""))
+            .font(.footnote).foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(6)
+    }
+
+    @ToolbarContentBuilder
+    private var mainToolbar: some ToolbarContent {
+        ToolbarItem(placement: .navigation) {
+            Button { openArchive() } label: {
+                Label("Open Archive", systemImage: "folder")
+            }
+            .help("Open an archive…")
+        }
+        ToolbarItem(placement: .navigation) {
+            Button { createNewArchive() } label: {
+                Label("New Archive", systemImage: "doc.badge.plus")
+            }
+            .help("Create a new archive…")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { extractSelected() } label: {
+                Label("Extract", systemImage: "square.and.arrow.down")
+            }
+            .disabled(selection.isEmpty)
+            .help("Extract the selected entries")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { addFiles() } label: {
+                Label("Add Files", systemImage: "plus.square")
+            }
+            .disabled(archiveURL == nil)
+            .help("Add files to this archive")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { quickLookSelected() } label: {
+                Label("Quick Look", systemImage: "eye")
+            }
+            .disabled(selection.isEmpty)
+            .help("Quick Look the selected entry")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { verifyArchive() } label: {
+                Label("Verify", systemImage: "checkmark.shield")
+            }
+            .disabled(archiveURL == nil)
+            .help("Verify the archive's integrity")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { convertArchive() } label: {
+                Label("Convert", systemImage: "arrow.triangle.2.circlepath")
+            }
+            .disabled(archiveURL == nil)
+            .help("Convert this archive to another format")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Picker("Sort", selection: $sortOrder) {
+                ForEach(EntrySortOrder.allCases, id: \.self) { order in
+                    Text(order.rawValue).tag(order)
+                }
+            }
+            .pickerStyle(.menu)
+            .labelsHidden()
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button { showSettings = true } label: {
+                Label("Settings", systemImage: "gearshape")
+            }
+            .help("Settings")
+            // Settings is a popover, not a sheet: a popover
+            // dismisses when the user clicks outside it (or
+            // presses Esc), so Settings never traps the user
+            // behind a modal that only Esc can close.
+            .popover(isPresented: $showSettings) {
+                SettingsView(settings: engineSettings)
+            }
+        }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            // Rename row: the only inline editing control left at the
-            // top. Every other action lives in the native toolbar
-            // (`.toolbar` on this VStack), the menu bar, or the
-            // context menu, so the top of the window is one clean
-            // strip instead of two rows of plain buttons.
-            HStack {
-                TextField("New name", text: $renameTo)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 220)
-                Button("Rename") { renameSelected() }
-                    .disabled(selection.count != 1 || renameTo.isEmpty)
-                Spacer()
-            }
-            .padding(.horizontal, 8)
-            .padding(.top, 6)
-            .padding(.bottom, 2)
+            renameRow
 
             if let verifySummary {
                 Text(verifySummary)
@@ -485,111 +685,7 @@ struct BrowserView: View {
                     .padding(.horizontal, 8)
             }
 
-            List(shownEntries, selection: $selection) { entry in
-                HStack {
-                    Image(systemName: entry.isDirectory ? "folder"
-                        : entry.isArchive ? "archivebox" : "doc")
-                    if entry.isEncrypted {
-                        Image(systemName: "lock.fill")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(entry.path)
-                    Spacer()
-                    // M5: CRC-32 from the listing (— when the format
-                    // does not report one); `verify` re-checks it.
-                    Text(entry.crc ?? "—")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                    Text(ByteCountFormatter.string(fromByteCount: Int64(entry.size),
-                                                   countStyle: .file))
-                        .foregroundStyle(.secondary)
-                }
-                .tag(entry.path)
-                // The whole row is the hit target, not just the
-                // text: without a content shape, SwiftUI only
-                // hit-tests the text and icons, so double-clicking
-                // the empty space between the name (left) and the
-                // CRC/size (right) did nothing. This also makes
-                // hover-select and drag-out work across the row.
-                .contentShape(Rectangle())
-                // Double-click opens: drill into a nested archive,
-                // open a file in its default app (folders do nothing
-                // — the list is flat, there is no folder to enter).
-                .onTapGesture(count: 2) { openSelected(entry) }
-                // Hover selects the row only while nothing is
-                // selected yet, so the preview follows the mouse
-                // while browsing — but once the user has clicked a
-                // file, moving the mouse over other rows must not
-                // yank the selection (and the preview) away.
-                .onHover { hovering in
-                    if hovering && selection.isEmpty { selection = [entry.path] }
-                }
-                // Drag out to Finder: the entry is promised, not
-                // copied up front — Finder asks for its bytes only
-                // when the drop lands (see `dragItemProvider`).
-                .onDrag {
-                    guard let archiveURL else { return NSItemProvider() }
-                    return dragItemProvider(for: entry, archiveURL: archiveURL)
-                } preview: {
-                    // Custom drag preview: the default one snapshots
-                    // the row in its selected state (white text)
-                    // without the selection background, so the name
-                    // came out unreadable white-on-light. An explicit
-                    // chip keeps the text primary-coloured on a
-                    // material background in both light and dark mode.
-                    HStack(spacing: 6) {
-                        Image(systemName: entry.isDirectory ? "folder"
-                            : entry.isArchive ? "archivebox" : "doc")
-                        Text(entry.path)
-                            .lineLimit(1)
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .foregroundStyle(.primary)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                }
-                // Right-click menu: the same actions as the toolbar,
-                // for the row under the cursor.
-                .contextMenu {
-                    Button("Open") { selection = [entry.path]; openSelected(entry) }
-                    Button("Preview") { selection = [entry.path]; togglePreview() }
-                    Button("Quick Look") { selection = [entry.path]; quickLookSelected() }
-                        .disabled(entry.isDirectory)
-                    Button("Extract Selected") { selection = [entry.path]; extractSelected() }
-                    Button("Copy Path") { copyEntryPath(entry) }
-                    Divider()
-                    Button("Remove Selected", role: .destructive) { selection = [entry.path]; removeSelected() }
-                }
-            }
-            // Space opens Quick Look for the selected entry (the
-            // native QLPreviewPanel, same as the context-menu
-            // Quick Look) — Finder-style. Only the key-down counts:
-            // holding Space repeats the event, and a repeat must
-            // not re-trigger the extraction behind the panel.
-            // The inline text preview is still on the context
-            // menu ("Preview") and follows the selection while open.
-            .onKeyPress(.space) { press in
-                guard press.phase == .down else { return .ignored }
-                quickLookSelected()
-                return .handled
-            }
-            // Return opens the selected entry (same as double-click),
-            // so opening is never mouse-only (HIG).
-            .onKeyPress(.return) {
-                if let selected = selection.first,
-                   let entry = info?.entries.first(where: { $0.path == selected }) {
-                    openSelected(entry)
-                }
-                return .handled
-            }
-            // Preview follows the selection (mouse hover/click or
-            // arrow keys) while the preview panel is open.
-            // (Zero-parameter form: the one-parameter `onChange`
-            // action is deprecated in macOS 14.)
-            .onChange(of: selection) {
-                if showPreview { loadPreview() }
-            }
+            fileList
 
             // M3: breadcrumb for nested archives.
             if !nestedPath.isEmpty {
@@ -619,12 +715,7 @@ struct BrowserView: View {
             }
 
             Divider()
-            // M6: the status line names the engine that handled the
-            // archive (`ArchiveInfo.engine`, stamped by the router).
-            Text(status + (info?.engine.map { " · engine: \($0)" } ?? ""))
-                .font(.footnote).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(6)
+            statusLine
         }
         .frame(minWidth: 640, minHeight: 420)
         // The window title is the open archive's name (Finder-like);
@@ -635,77 +726,7 @@ struct BrowserView: View {
         // icon buttons with labels, grouped leading/trailing the
         // way macOS apps do it. The search field (`.searchable`)
         // and the sort picker sit in the same strip.
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button { openArchive() } label: {
-                    Label("Open Archive", systemImage: "folder")
-                }
-                .help("Open an archive…")
-            }
-            ToolbarItem(placement: .navigation) {
-                Button { createNewArchive() } label: {
-                    Label("New Archive", systemImage: "doc.badge.plus")
-                }
-                .help("Create a new archive…")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { extractSelected() } label: {
-                    Label("Extract", systemImage: "square.and.arrow.down")
-                }
-                .disabled(selection.isEmpty)
-                .help("Extract the selected entries")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { addFiles() } label: {
-                    Label("Add Files", systemImage: "plus.square")
-                }
-                .disabled(archiveURL == nil)
-                .help("Add files to this archive")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { quickLookSelected() } label: {
-                    Label("Quick Look", systemImage: "eye")
-                }
-                .disabled(selection.isEmpty)
-                .help("Quick Look the selected entry")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { verifyArchive() } label: {
-                    Label("Verify", systemImage: "checkmark.shield")
-                }
-                .disabled(archiveURL == nil)
-                .help("Verify the archive's integrity")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { convertArchive() } label: {
-                    Label("Convert", systemImage: "arrow.triangle.2.circlepath")
-                }
-                .disabled(archiveURL == nil)
-                .help("Convert this archive to another format")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Picker("Sort", selection: $sortOrder) {
-                    ForEach(EntrySortOrder.allCases, id: \.self) { order in
-                        Text(order.rawValue).tag(order)
-                    }
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button { showSettings = true } label: {
-                    Label("Settings", systemImage: "gearshape")
-                }
-                .help("Settings")
-                // Settings is a popover, not a sheet: a popover
-                // dismisses when the user clicks outside it (or
-                // presses Esc), so Settings never traps the user
-                // behind a modal that only Esc can close.
-                .popover(isPresented: $showSettings) {
-                    SettingsView(settings: engineSettings)
-                }
-            }
-        }
+        .toolbar { mainToolbar }
         .sheet(isPresented: $showPasswordPrompt) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("Password required").font(.headline)
