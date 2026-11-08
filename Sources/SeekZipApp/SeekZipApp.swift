@@ -559,9 +559,14 @@ struct BrowserView: View {
         // Quick Look) — Finder-style. Only the key-down counts:
         // holding Space repeats the event, and a repeat must
         // not re-trigger the extraction behind the panel.
+        // NOTE: the single-key `.onKeyPress(.space)` variant
+        // passes NO argument to its closure — the KeyPress
+        // value (with `.phase`) is only delivered by the Set
+        // form below. (Using `{ press in` with `.space`
+        // fails to compile.)
         // The inline text preview is still on the context
         // menu ("Preview") and follows the selection while open.
-        .onKeyPress(.space) { press in
+        .onKeyPress([.space]) { press in
             guard press.phase == .down else { return .ignored }
             quickLookSelected()
             return .handled
