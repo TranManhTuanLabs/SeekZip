@@ -264,18 +264,20 @@ struct GitHubMarkShape: Shape {
         return path.applying(CGAffineTransform(scaleX: scale, y: scale).concatenating(CGAffineTransform(translationX: dx, y: dy)))
     }
 }
-/// Build stamp — updated on every [build-app] commit. The About tab
-/// shows it so a test can be tied to the exact build that is
-/// running: every build reports the same 0.2.0 version, so the
-/// version alone cannot tell two builds apart.
-private let seekZipBuildStamp = "2026-11-08 22:46 +07"
-
 /// About: what SeekZip is, its version, and where its source lives.
 /// Centered like a macOS About panel — the old left-aligned block
 /// left a big empty area under the text.
 struct AboutView: View {
     private var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0"
+    }
+    /// CI build number (CFBundleVersion): ci.yml sets
+    /// CURRENT_PROJECT_VERSION to the GitHub run number for
+    /// the build-app job, so a test can be tied to the exact
+    /// build that is running. Local builds keep the project's
+    /// default ("1") and hide the line.
+    private var buildNumber: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
     }
 
     var body: some View {
@@ -289,9 +291,11 @@ struct AboutView: View {
                 .fontWeight(.semibold)
             Text("Version \(version)")
                 .foregroundStyle(.secondary)
-            Text("Build \(seekZipBuildStamp)")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            if buildNumber != "1" {
+                Text("Build CI #\(buildNumber)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Text("Browse and preview archives before extracting, extract only what you need, and create ZIP and 7z archives — free, native for Apple Silicon.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
