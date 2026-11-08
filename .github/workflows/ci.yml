@@ -47,3 +47,31 @@ jobs:
           test -f "/tmp/out/src/hello.txt"
           # zip-slip must be blocked with exit code 4
           $BIN extract /tmp/fixtures/zip-slip.zip /tmp/out && exit 1 || test $? -eq 4
+
+  build-app:
+    # Test build, on demand: only runs when the commit message contains
+    # [build-app]. Builds the app (unsigned) with the engines bundled
+    # and uploads SeekZip.app as a downloadable artifact, so the app
+    # can be tested without installing Xcode locally. Only runs after
+    # build-and-test passes.
+    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-app]')
+    needs: build-and-test
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install 7-Zip engine
+        run: brew install sevenzip unar
+
+      - name: Stage engines into build/Helpers
+        run: bash scripts/package-engines.sh
+
+      - name: Build app (unsigned)
+        run: xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Debug build CODE_SIGNING_ALLOWED=NO -derivedDataPath .build/xcode-derived
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: SeekZip-app
+          path: .build/xcode-derived/Build/Products/Debug/SeekZip.app
+          retention-days: 30
