@@ -142,6 +142,45 @@ struct EngineSettingsView: View {
     }
 }
 
+/// Settings sheet: engine settings plus About (app version + GitHub link).
+struct SettingsView: View {
+    @ObservedObject var settings: EngineSettings
+
+    var body: some View {
+        TabView {
+            EngineSettingsView(settings: settings)
+                .tabItem { Label("Engines", systemImage: "gearshape") }
+            AboutView()
+                .tabItem { Label("About", systemImage: "info.circle") }
+        }
+        .frame(minWidth: 460, minHeight: 380)
+    }
+}
+
+/// About: what SeekZip is, its version, and where its source lives.
+struct AboutView: View {
+    private var version: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.2.0"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("SeekZip")
+                .font(.largeTitle)
+            Text("Version \(version)")
+                .foregroundStyle(.secondary)
+            Text("Browse and preview archives before extracting, extract only what you need, and create ZIP and 7z archives — free, native for Apple Silicon.")
+            Link("SeekZip on GitHub", destination: URL(string: "https://github.com/TranManhTuanLabs/SeekZip")!)
+            Text("Free and open source. Report issues and request features on GitHub.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding()
+    }
+}
+
 struct BrowserView: View {
     @State private var archiveURL: URL?
     @State private var info: ArchiveInfo?
@@ -165,7 +204,7 @@ struct BrowserView: View {
     // M6: engine settings (default engine + per-format overrides)
     // and the settings sheet. Listings go through the router.
     @StateObject private var engineSettings = EngineSettings.shared
-    @State private var showEngineSettings = false
+    @State private var showSettings = false
 
     private var shownEntries: [ArchiveEntry] {
         guard let info else { return [] }
@@ -181,15 +220,14 @@ struct BrowserView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 260)
                 Spacer()
-                // M6: engine settings — default engine + per-format
-                // overrides (UserDefaults, shared with extensions).
-                Button("Engines…") { showEngineSettings = true }
+                // Settings: engine picker + About (with GitHub link).
+                Button("Settings…") { showSettings = true }
                 Button("Extract Selected") { extractSelected() }
                     .disabled(selection.isEmpty)
             }
             .padding(8)
-            .sheet(isPresented: $showEngineSettings) {
-                EngineSettingsView(settings: engineSettings)
+            .sheet(isPresented: $showSettings) {
+                SettingsView(settings: engineSettings)
             }
 
             // M5: edit row — add/remove/rename/convert/verify. All of
@@ -247,10 +285,29 @@ struct BrowserView: View {
                 .tag(entry.path)
                 // M3: double-click a nested archive to drill into it.
                 .onTapGesture(count: 2) { drillInto(entry) }
+                // Hover selects the row, so the preview (when open)
+                // follows the mouse just like it follows the arrow keys.
+                .onHover { hovering in
+                    if hovering { selection = [entry.path] }
+                }
+                // Right-click menu: the same actions as the toolbar,
+                // for the row under the cursor.
+                .contextMenu {
+                    Button("Preview") { selection = [entry.path]; togglePreview() }
+                    Button("Extract Selected") { selection = [entry.path]; extractSelected() }
+                    Button("Copy Path") { copyEntryPath(entry) }
+                    Divider()
+                    Button("Remove Selected", role: .destructive) { selection = [entry.path]; removeSelected() }
+                }
             }
             .onKeyPress(.space) {
                 togglePreview()
                 return .handled
+            }
+            // Preview follows the selection (mouse hover/click or
+            // arrow keys) while the preview panel is open.
+            .onChange(of: selection) { _ in
+                if showPreview { loadPreview() }
             }
 
             // M3: breadcrumb for nested archives.
@@ -417,6 +474,20 @@ struct BrowserView: View {
             return
         }
         showPreview = true
+        loadPreview(archiveURL: archiveURL, entry: entry)
+    }
+
+    /// Load (or reload) the preview for the current selection, without
+    /// toggling the panel — used when the selection moves while the
+    /// panel is already open (hover, click, arrow keys).
+    private func loadPreview() {
+        guard let archiveURL,
+              let selected = selection.first,
+              let entry = info?.entries.first(where: { $0.path == selected }) else { return }
+        loadPreview(archiveURL: archiveURL, entry: entry)
+    }
+
+    private func loadPreview(archiveURL: URL, entry: ArchiveEntry) {
         Task {
             do {
                 guard let router = engineSettings.makeRouter() else {
@@ -434,6 +505,12 @@ struct BrowserView: View {
                 status = "Preview failed: \(error)"
             }
         }
+    }
+
+    /// Copy the entry's path inside the archive to the clipboard.
+    private func copyEntryPath(_ entry: ArchiveEntry) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(entry.path, forType: .string)
     }
 
     /// M3: drill into a nested archive entry, in place.
