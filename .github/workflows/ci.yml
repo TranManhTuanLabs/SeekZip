@@ -56,7 +56,7 @@ jobs:
 
   build-app:
     # Test build, on demand: only runs when the commit message contains
-    # [build-app]. Builds the app (unsigned, Release) with the engines
+    # [build-app]. Builds the app (Release, ad-hoc signed after the build) with the engines
     # bundled, packages it as a zip (ditto keeps the .app bundle intact,
     # like TransPeek does), and uploads the zip as a downloadable
     # artifact, so the app can be tested without installing Xcode
@@ -77,6 +77,22 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -project SeekZip.xcodeproj -scheme SeekZip -configuration Release build CODE_SIGNING_ALLOWED=NO CURRENT_PROJECT_VERSION=${{ github.run_number }} -derivedDataPath .build/xcode-derived | xcbeautify
+
+      # Ad-hoc sign the app so the Finder Sync and Quick Look
+      # extensions load: macOS refuses an unsigned extension.
+      # Ad-hoc (`-`) changes nothing for the user — the app still
+      # opens with right-click → Open the first time. The appex
+      # bundles are signed first, each with its own entitlements,
+      # then the app itself.
+      - name: Ad-hoc sign app and extensions
+        run: |
+          APP=.build/xcode-derived/Build/Products/Release/SeekZip.app
+          codesign --force --sign - --entitlements SeekZipFinderSync/FinderSync.entitlements \
+            "$APP/Contents/PlugIns/SeekZipFinderSync.appex"
+          codesign --force --sign - --entitlements SeekZipQuickLook/QuickLook.entitlements \
+            "$APP/Contents/PlugIns/SeekZipQuickLook.appex"
+          codesign --force --sign - --entitlements SeekZip/SeekZip.entitlements "$APP"
+          codesign --verify --deep --strict "$APP"
 
       - name: Zip app
         run: |
