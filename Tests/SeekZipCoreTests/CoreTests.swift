@@ -506,7 +506,8 @@ final class QueueTests: XCTestCase {
     /// non-flag argument), optionally sleeps (slow) or fails. `t`
     /// prints progress and exits 0. Traps TERM so cancel tests can
     /// prove the process really died.
-    private func makeQueueFake(slow: Bool = false, failCreate: Bool = false) throws -> (script: URL, marker: URL, log: URL, dir: URL) {
+    private func makeQueueFake(slow: Bool = false, failCreate: Bool = false,
+                               failExtract: Bool = false) throws -> (script: URL, marker: URL, log: URL, dir: URL) {
         let dir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -535,6 +536,7 @@ final class QueueTests: XCTestCase {
           dest=""; arch=""
           for a in "$@"; do case "$a" in -o*) dest="${a#-o}";; -*) ;; *) arch="$a";; esac; done
           echo "$arch" >> "$LOG"
+          if [ "\(failExtract ? "1" : "0")" = "1" ]; then echo "fake failure" >&2; exit 2; fi
           if [ "\(slow ? "1" : "0")" = "1" ]; then
             i=1; while [ $i -le 30 ]; do echo "$i" >> "$MARKER"; sleep 0.1; i=$((i+1)); done
           fi
@@ -821,6 +823,91 @@ final class QueueTests: XCTestCase {
         })
         queueB.runAll()
         XCTAssertEqual(queueB.record(for: job.id)?.status, .done)
+    }
+
+    // MARK: Compression presets, PATH lookup, extract staging
+
+    /// A fake `7zz` that logs its full argument list for `a` (create)
+    /// and writes the archive file, so tests can assert the exact
+    /// switches the engine passes (e.g. the default `-mx=5`).
+    private func makeArgLoggingFake() throws -> (script: URL, log: URL, dir: URL) {
+        let dir = try tempDir()
+        let script = dir.appendingPathComponent("fake7zz")
+        let log = dir.appendingPathComponent("args.log")
+        let text = """
+        #!/bin/sh
+        LOG="\(log.path)"
+        cmd="$1"; shift
+        if [ "$cmd" = "a" ]; then
+          printf '%s\\n' "$@" >> "$LOG"
+          arch=""
+          for a in "$@"; do case "$a" in -*) ;; *) if [ -z "$arch" ]; then arch="$a"; fi;; esac; done
+          mkdir -p "$(dirname "$arch")"
+          printf 'fake archive\\n' > "$arch"
+          exit 0
+        fi
+        exit 2
+        """
+        try text.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        return (script, log, dir)
+    }
+
+    func testCreateDefaultsToNormalLevel() throws {
+        let fake = try makeArgLoggingFake()
+        let engine = try SevenZipEngine(binaryPath: fake.script.path)
+        let dir = try tempDir()
+        let src = dir.appendingPathComponent("hello.txt")
+        try "hello".write(to: src, atomically: true, encoding: .utf8)
+        try engine.create(archive: dir.appendingPathComponent("out.7z"),
+                          sources: [src], format: "7z")
+        XCTAssertTrue(logLines(fake.log).contains("-mx=5"),
+                      "create without a level must default to Normal (5), got: \(logLines(fake.log))")
+        try engine.create(archive: dir.appendingPathComponent("out9.7z"),
+                          sources: [src], format: "7z", level: 9)
+        XCTAssertTrue(logLines(fake.log).contains("-mx=9"))
+        XCTAssertEqual(CompressionPreset.default.level, 5)
+        XCTAssertEqual(CompressionPreset.allCases.map(\.level), [1, 5, 7, 9])
+    }
+
+    func testEngineBinarySearchFindsPATH() throws {
+        let dir = try tempDir()
+        let script = dir.appendingPathComponent("seekzip-test-binary-xyz")
+        try "#!/bin/sh\nexit 0\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755],
+                                              ofItemAtPath: script.path)
+        XCTAssertEqual(
+            EngineBinarySearch.find(named: "seekzip-test-binary-xyz",
+                                    pathString: dir.path)?.path, script.path)
+        XCTAssertNil(EngineBinarySearch.find(named: "seekzip-test-binary-xyz",
+                                             pathString: "/definitely/not/a/real/dir"))
+    }
+
+    func testExtractStagesThenMovesIntoPlace() throws {
+        let fake = try makeQueueFake()
+        let engine = try SevenZipEngine(binaryPath: fake.script.path)
+        let dest = try tempDir()
+        try engine.extract(archive: URL(fileURLWithPath: "/tmp/a.zip"), to: dest)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: dest.appendingPathComponent("hello.txt").path))
+        let leftovers = try FileManager.default.contentsOfDirectory(
+            at: dest, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(".seekzip-7zz-tmp-") }
+        XCTAssertTrue(leftovers.isEmpty,
+                      "the staging directory must be removed after a successful extract")
+    }
+
+    func testFailedExtractLeavesNoPartialOutput() throws {
+        let fake = try makeQueueFake(failExtract: true)
+        let engine = try SevenZipEngine(binaryPath: fake.script.path)
+        let dest = try tempDir()
+        XCTAssertThrowsError(try engine.extract(
+            archive: URL(fileURLWithPath: "/tmp/a.zip"), to: dest))
+        let contents = try FileManager.default.contentsOfDirectory(
+            at: dest, includingPropertiesForKeys: nil)
+        XCTAssertTrue(contents.isEmpty,
+                      "a failed extract must leave nothing in the destination, found: \(contents)")
     }
 }
 

@@ -22,12 +22,13 @@ let sha256Flag = rawArgs.contains("--sha256")
 let envPassword = ProcessInfo.processInfo.environment["SEEKZIP_PASSWORD"]
     .flatMap { $0.isEmpty ? nil : $0 }
 
-/// Parses flags out of the arguments. `--format`, `--into` and
-/// `--engine` take a value; `--json`, `--stream` and `--sha256` do
-/// not. Everything else is positional, in order.
+/// Parses flags out of the arguments. `--format`, `--into`,
+/// `--engine` and `--level` take a value; `--json`, `--stream` and
+/// `--sha256` do not. Everything else is positional, in order.
 var formatFlag: String?
 var intoFlag: String?
 var engineFlag: String?
+var levelFlag: Int?
 var positional: [String] = []
 do {
     var i = rawArgs.startIndex
@@ -41,6 +42,9 @@ do {
             i = rawArgs.index(after: rawArgs.index(after: i))
         } else if a == "--engine", rawArgs.index(after: i) < rawArgs.endIndex {
             engineFlag = rawArgs[rawArgs.index(after: i)]
+            i = rawArgs.index(after: rawArgs.index(after: i))
+        } else if a == "--level", rawArgs.index(after: i) < rawArgs.endIndex {
+            levelFlag = Int(rawArgs[rawArgs.index(after: i)])
             i = rawArgs.index(after: rawArgs.index(after: i))
         } else if a.hasPrefix("--") {
             i = rawArgs.index(after: i)
@@ -280,10 +284,14 @@ do {
         print(json ? "{\"ok\":true,\"engine\":\"\(extractEngine)\"}" : "Extracted (engine: \(extractEngine))")
     case "create":
         guard positional.count >= 3 else { fail(2, "create needs <archive> <source…>") }
+        if let levelFlag, !(0...9).contains(levelFlag) {
+            fail(2, "--level must be 0–9 (0 store, 1 fast, 5 normal, 7 maximum, 9 ultra)")
+        }
         try engine.create(archive: URL(fileURLWithPath: positional[1]),
                           sources: positional[2...].map { URL(fileURLWithPath: $0) },
-                          format: formatFlag ?? "zip", password: envPassword,
-                          control: directControl)
+                          format: formatFlag ?? "zip",
+                          level: levelFlag ?? CompressionPreset.default.level,
+                          password: envPassword, control: directControl)
         print(json ? "{\"ok\":true}" : "Created")
     case "add":
         guard positional.count >= 3 else { fail(2, "add needs <archive> <sources…>") }

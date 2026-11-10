@@ -618,7 +618,7 @@ public final class EngineRouter: ArchiveEngine, @unchecked Sendable {
     // MARK: - 7zz-only operations (delegated)
 
     public func create(archive: URL, sources: [URL], format: String,
-                       level: Int = 9, password: String? = nil,
+                       level: Int = 5, password: String? = nil,
                        splitMB: Int = 0, control: JobControl? = nil,
                        onProgress: ((JobProgress) -> Void)? = nil) throws {
         try sevenZip().create(archive: archive, sources: sources, format: format,
@@ -627,7 +627,7 @@ public final class EngineRouter: ArchiveEngine, @unchecked Sendable {
     }
 
     public func addEntries(archive: URL, sources: [URL], prefix: String? = nil,
-                           level: Int = 9, password: String? = nil,
+                           level: Int = 5, password: String? = nil,
                            control: JobControl? = nil,
                            onProgress: ((JobProgress) -> Void)? = nil) throws {
         try sevenZip().addEntries(archive: archive, sources: sources, prefix: prefix,

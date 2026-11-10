@@ -60,6 +60,12 @@ struct SeekZipApp: App {
             BrowserView()
         }
         .windowStyle(.titleBar)
+        // The window keeps a fixed default size and never grows
+        // with its content: a long list or queue used to stretch it
+        // until the bottom controls fell off-screen. The file list
+        // itself already scrolls inside; this caps the window.
+        .defaultSize(width: 900, height: 600)
+        .windowResizability(.contentMinSize)
         // Menu bar (HIG: the menu is the primary discovery mechanism
         // — users look there before anywhere else). Before this, the
         // app had no commands at all and the status line's "⌘O" was
@@ -196,12 +202,67 @@ struct EngineSettingsView: View {
 }
 
 /// Settings sheet: engine settings plus About (app version + GitHub link).
+/// Settings → Finder: whether the Finder extension is enabled, and
+/// how to turn it on. The extension writes a heartbeat (last seen)
+/// to the App Group defaults whenever it starts; a missing heartbeat
+/// means it has never run — either it is disabled, or the user has
+/// not opened a Finder window since enabling it.
+struct FinderSettingsView: View {
+    @State private var lastSeen: Date?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: lastSeen == nil ? "exclamationmark.circle" : "checkmark.circle.fill")
+                    .foregroundStyle(lastSeen == nil ? .orange : .green)
+                if let lastSeen {
+                    Text("Extension is enabled — last seen \(lastSeen, style: .relative) ago.")
+                } else {
+                    Text("Extension not running yet — follow the steps below.")
+                }
+            }
+            .font(.callout)
+            Divider()
+            Text("To enable the right-click menu:")
+                .font(.headline)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("1. Click “Open System Settings” below.")
+                Text("2. Go to Privacy & Security → Extensions → Finder Extensions.")
+                Text("3. Turn on SeekZip, then right-click any file in Finder — the SeekZip submenu appears right away, no restart needed.")
+            }
+            .font(.callout)
+            Button("Open System Settings") { Self.openExtensionsPane() }
+                .buttonStyle(.borderedProminent)
+            Text("If the menu still does not appear, quit and reopen Finder (Option-right-click the Finder icon in the Dock → Relaunch).")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { refresh() }
+    }
+
+    private func refresh() {
+        let defaults = UserDefaults(suiteName: SeekZipAppGroup.suiteName) ?? .standard
+        lastSeen = defaults.object(forKey: SeekZipAppGroup.finderSyncLastSeenKey) as? Date
+    }
+
+    /// Deep link straight to the Extensions pane; falls back to
+    /// opening System Settings itself when the pane URL is refused.
+    private static func openExtensionsPane() {
+        let pane = "x-apple.systempreferences:com.apple.ExtensionsPreferences"
+        if let url = URL(string: pane), NSWorkspace.shared.open(url) { return }
+        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:")!)
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var settings: EngineSettings
 
     var body: some View {
         TabView {
-            // Both tabs scroll, so nothing is ever clipped in
+            // All tabs scroll, so nothing is ever clipped in
             // the fixed-size popover. The About tab keeps its
             // centered layout via minHeight: when the content
             // fits, the spacers center it; when it grows, the
@@ -210,6 +271,10 @@ struct SettingsView: View {
                 EngineSettingsView(settings: settings)
             }
             .tabItem { Label("Engines", systemImage: "gearshape") }
+            ScrollView {
+                FinderSettingsView()
+            }
+            .tabItem { Label("Finder", systemImage: "folder.badge.plus") }
             GeometryReader { geo in
                 ScrollView {
                     AboutView()
@@ -218,7 +283,7 @@ struct SettingsView: View {
             }
             .tabItem { Label("About", systemImage: "info.circle") }
         }
-        // Fixed size, not a minimum: both tabs share it, so the
+        // Fixed size, not a minimum: all tabs share it, so the
         // popover never jumps or resizes when switching tabs.
         .frame(width: 480, height: 420)
     }
@@ -490,6 +555,11 @@ final class QuickLookController: NSObject, QLPreviewPanelDataSource, QLPreviewPa
 struct BrowserView: View {
     @State private var archiveURL: URL?
     @State private var info: ArchiveInfo?
+    /// While a top-level listing is still streaming in, rows show
+    /// unsorted — sorting tens of thousands of rows on the main
+    /// thread for every snapshot would freeze the UI (see
+    /// `shownEntries` and `loadTopLevelListing`).
+    @State private var isLoadingList = false
     @State private var selection = Set<String>()
     @State private var status = "Open an archive to begin (⌘O)"
     @State private var filter = ""
@@ -525,6 +595,11 @@ struct BrowserView: View {
         let filtered: [ArchiveEntry]
         if filter.isEmpty { filtered = info.entries }
         else { filtered = info.entries.filter { $0.path.localizedCaseInsensitiveContains(filter) } }
+        // While the listing is still streaming in, show rows in
+        // archive order: a full sort on every snapshot would cost
+        // O(n log n) on the main thread per snapshot. The chosen
+        // sort applies once, when the listing finishes.
+        if isLoadingList { return filtered }
         switch sortOrder {
         case .archive:
             return filtered
@@ -885,6 +960,13 @@ struct BrowserView: View {
         .onReceive(NotificationCenter.default.publisher(for: .seekZipAddFilesRequest)) { _ in addFiles() }
         .onReceive(NotificationCenter.default.publisher(for: .seekZipRemoveSelectedRequest)) { _ in removeSelected() }
         .onReceive(NotificationCenter.default.publisher(for: .seekZipQuickLookRequest)) { _ in quickLookSelected() }
+        // "Add to Archive…" from the Finder extension: the
+        // extension wrote the selection to the App Group and opened
+        // the app; the file is consumed here. Checked both when the
+        // app becomes active and on appear (in case it was written
+        // while the app was already running).
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in consumePendingCreate() }
+        .onAppear { consumePendingCreate() }
     }
 
     /// M4: the queue panel. Jobs are persisted by `JobQueue`, so this
@@ -898,30 +980,36 @@ struct BrowserView: View {
                 Button("Refresh") { refreshQueue() }
                     .font(.caption)
             }
-            ForEach(queueJobs) { job in
-                HStack {
-                    Text(job.descriptor.kind.rawValue).font(.caption)
-                    Text(job.descriptor.archive).lineLimit(1).font(.caption)
-                    Spacer()
-                    if let fraction = job.progress {
-                        ProgressView(value: fraction).frame(width: 80)
-                    }
-                    Text(job.status.rawValue).font(.caption)
-                        .foregroundStyle(.secondary)
-                    if job.status == .running || job.status == .queued {
-                        Button("Pause") { queue?.pause(id: job.id); refreshQueue() }
-                            .font(.caption)
-                    }
-                    if job.status == .paused || job.status == .interrupted {
-                        Button("Resume") { queue?.resume(id: job.id); runQueueInBackground() }
-                            .font(.caption)
-                    }
-                    if job.status == .queued || job.status == .running || job.status == .paused {
-                        Button("Cancel") { queue?.cancel(id: job.id); refreshQueue() }
-                            .font(.caption)
+            // The queue scrolls inside a capped panel: with many
+            // jobs it used to stretch the whole window until the
+            // bottom controls fell off-screen.
+            ScrollView {
+                ForEach(queueJobs) { job in
+                    HStack {
+                        Text(job.descriptor.kind.rawValue).font(.caption)
+                        Text(job.descriptor.archive).lineLimit(1).font(.caption)
+                        Spacer()
+                        if let fraction = job.progress {
+                            ProgressView(value: fraction).frame(width: 80)
+                        }
+                        Text(job.status.rawValue).font(.caption)
+                            .foregroundStyle(.secondary)
+                        if job.status == .running || job.status == .queued {
+                            Button("Pause") { queue?.pause(id: job.id); refreshQueue() }
+                                .font(.caption)
+                        }
+                        if job.status == .paused || job.status == .interrupted {
+                            Button("Resume") { queue?.resume(id: job.id); runQueueInBackground() }
+                                .font(.caption)
+                        }
+                        if job.status == .queued || job.status == .running || job.status == .paused {
+                            Button("Cancel") { queue?.cancel(id: job.id); refreshQueue() }
+                                .font(.caption)
+                        }
                     }
                 }
             }
+            .frame(maxHeight: 150)
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
@@ -1079,19 +1167,25 @@ struct BrowserView: View {
         }
     }
 
-    /// M3: one level back up out of a nested archive.
+    /// M3: one level back up out of a nested archive. Back at the
+    /// root, the listing streams in progressively like a fresh open.
     private func goBack() {
         guard let archiveURL else { return }
         let next = Array(nestedPath.dropLast())
+        if next.isEmpty {
+            nestedPath = []
+            preview = nil
+            showPreview = false
+            loadTopLevelListing(url: archiveURL)
+            return
+        }
         Task {
             do {
                 guard let router = engineSettings.makeRouter() else {
                     status = "No engine available"
                     return
                 }
-                let loaded = next.isEmpty
-                    ? try router.list(archive: archiveURL)
-                    : try router.listNested(archive: archiveURL, nestedPath: next)
+                let loaded = try router.listNested(archive: archiveURL, nestedPath: next)
                 nestedPath = next
                 info = loaded
                 preview = nil
@@ -1122,24 +1216,67 @@ struct BrowserView: View {
         nestedPath = []
         preview = nil
         showPreview = false
+        loadTopLevelListing(url: url, password: password)
+    }
+
+    /// Load a top-level listing progressively: rows appear as 7zz
+    /// streams them in (a snapshot every 500 entries) instead of
+    /// waiting for the whole listing — a 50k-entry archive used to
+    /// show nothing for ~11 s. The parse runs in a detached task
+    /// (off the main actor), so the UI stays responsive while it
+    /// streams; snapshots go back through the main queue. Sorting
+    /// stays off while loading (see `shownEntries`) and applies once
+    /// to the finished list. A header-encrypted archive (or a wrong
+    /// stored password) throws `wrongPassword` and the password
+    /// sheet asks the user, same as before.
+    private func loadTopLevelListing(url: URL, password: String? = nil) {
+        guard let router = engineSettings.makeRouter() else {
+            status = "No engine available"
+            return
+        }
+        isLoadingList = true
+        status = "Loading…"
+        let physicalSize: UInt64
+        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+           let size = attrs[.size] as? NSNumber {
+            physicalSize = size.uint64Value
+        } else {
+            physicalSize = 0
+        }
         Task {
             do {
-                guard let router = engineSettings.makeRouter() else {
-                    status = "No engine available"
-                    return
-                }
-                let loaded = try router.list(archive: url, password: password)
+                let loaded = try await Task.detached(priority: .userInitiated) {
+                    var collected: [ArchiveEntry] = []
+                    return try router.listStreaming(archive: url, password: password) { entry in
+                        collected.append(entry)
+                        if collected.count % 500 == 0 {
+                            let snapshot = collected
+                            DispatchQueue.main.async {
+                                self.info = ArchiveInfo(
+                                    path: url.path,
+                                    format: url.pathExtension.lowercased(),
+                                    physicalSize: physicalSize,
+                                    entries: snapshot)
+                                self.status = "Loading… \(snapshot.count) entries"
+                            }
+                        }
+                        return true
+                    }
+                }.value
                 info = loaded
+                isLoadingList = false
                 status = "\(loaded.entries.count) entries · " +
                          ByteCountFormatter.string(fromByteCount: Int64(loaded.totalUncompressed),
                                                    countStyle: .file) + " uncompressed"
             } catch EngineError.wrongPassword {
+                isLoadingList = false
                 pendingPasswordURL = url
                 passwordPromptWrong = password != nil
                 passwordInput = ""
                 showPasswordPrompt = true
                 status = "This archive needs a password"
             } catch {
+                isLoadingList = false
                 status = "Error: \(error)"
             }
         }
@@ -1156,6 +1293,22 @@ struct BrowserView: View {
         showPasswordPrompt = false
         try? PasswordStore.shared.save(password: password, for: url.path)
         openArchive(url, password: password)
+    }
+
+    /// Picks up an "Add to Archive…" handoff from the Finder
+    /// extension: the extension wrote the selected paths to
+    /// `pending-create.json` in the App Group container and opened
+    /// the app; the file is read and deleted here, and the New
+    /// Archive dialog opens with those sources.
+    private func consumePendingCreate() {
+        guard let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: SeekZipAppGroup.suiteName) else { return }
+        let file = container.appendingPathComponent(SeekZipAppGroup.pendingCreateFileName)
+        guard let data = try? Data(contentsOf: file),
+              let paths = try? JSONDecoder().decode([String].self, from: data),
+              !paths.isEmpty else { return }
+        try? FileManager.default.removeItem(at: file)
+        createNewArchive(sources: paths.map { URL(fileURLWithPath: $0) })
     }
 
     /// Create a new archive from files (menu ⌘⇧N, or files dropped
@@ -1179,15 +1332,33 @@ struct BrowserView: View {
         let save = NSSavePanel()
         save.nameFieldStringValue = "Archive.7z"
         save.prompt = "Create"
+        // Compression preset (Fast / Normal / Maximum / Ultra),
+        // default Normal. The old default was Ultra (level 9), which
+        // costs ~3x the time of level 7 for ~1% smaller output
+        // (parity research: mx=9 took 163 s on 150 MB of text).
+        let presetPopup = NSPopUpButton()
+        presetPopup.addItems(withTitles: CompressionPreset.allCases.map(\.label))
+        presetPopup.selectItem(at: CompressionPreset.allCases.firstIndex(of: .normal) ?? 1)
+        let accessory = NSView(frame: NSRect(x: 0, y: 0, width: 300, height: 28))
+        let accessoryLabel = NSTextField(labelWithString: "Compression:")
+        accessoryLabel.frame = NSRect(x: 0, y: 4, width: 90, height: 20)
+        presetPopup.frame = NSRect(x: 95, y: 0, width: 200, height: 26)
+        accessory.addSubview(accessoryLabel)
+        accessory.addSubview(presetPopup)
+        save.accessoryView = accessory
         guard save.runModal() == .OK, let dest = save.url else { return }
         let ext = dest.pathExtension.lowercased()
         let format = (ext == "zip" || ext == "7z" || ext == "tar") ? ext : "7z"
         let finalDest = (ext == "zip" || ext == "7z" || ext == "tar")
             ? dest : dest.appendingPathExtension("7z")
+        let selectedPreset = presetPopup.indexOfSelectedItem
+        let preset = (0..<CompressionPreset.allCases.count).contains(selectedPreset)
+            ? CompressionPreset.allCases[selectedPreset] : .normal
         Task {
             do {
                 let engine = try SevenZipEngine()
-                try engine.create(archive: finalDest, sources: picked, format: format)
+                try engine.create(archive: finalDest, sources: picked,
+                                  format: format, level: preset.level)
                 status = "Created \(finalDest.lastPathComponent)"
                 openArchive(finalDest)
             } catch {
@@ -1345,16 +1516,18 @@ struct BrowserView: View {
     /// list, CRC column and counts reflect the new contents.
     private func reloadListing() {
         guard let archiveURL else { return }
+        if nestedPath.isEmpty {
+            loadTopLevelListing(url: archiveURL)
+            return
+        }
         Task {
             do {
                 guard let router = engineSettings.makeRouter() else {
                     status = "No engine available"
                     return
                 }
-                let loaded = nestedPath.isEmpty
-                    ? try router.list(archive: archiveURL)
-                    : try router.listNested(archive: archiveURL,
-                                            nestedPath: nestedPath)
+                let loaded = try router.listNested(archive: archiveURL,
+                                                   nestedPath: nestedPath)
                 info = loaded
                 status = "\(loaded.entries.count) entries"
             } catch {

@@ -14,6 +14,37 @@ public enum SeekZipAppGroup {
     /// Defaults keys shared by the app and its extensions (M6/M7).
     public static let defaultEngineKey = "seekzip.engine.default"
     public static let formatOverridesKey = "seekzip.engine.overrides"
+    /// The Finder Sync extension writes the date it last started here
+    /// (App Group defaults), so the app's Finder tab can show whether
+    /// the extension is enabled without guessing.
+    public static let finderSyncLastSeenKey = "seekzip.finderSync.lastSeen"
+    /// File in the App Group container carrying a pending
+    /// "Add to Archive..." request from the Finder extension (a JSON
+    /// array of file paths); the app consumes and deletes it.
+    public static let pendingCreateFileName = "pending-create.json"
+}
+
+/// Where engine binaries are found, in order: the bundled Helpers
+/// inside the packaged app, the well-known install dirs
+/// (/opt/homebrew/bin, /usr/local/bin, /usr/bin), then every
+/// directory on PATH. (Before this, the engines only checked the
+/// three fixed dirs despite a comment claiming PATH — a 7zz installed
+/// via MacPorts, Nix or a custom prefix was invisible to the app.)
+public enum EngineBinarySearch {
+    public static func find(named name: String,
+                            pathString: String? = nil) -> URL? {
+        if let bundled = BundledEngines.url(named: name) { return bundled }
+        var dirs = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+        let path = pathString ?? ProcessInfo.processInfo.environment["PATH"] ?? ""
+        dirs.append(contentsOf: path.split(separator: ":").map(String.init))
+        for dir in dirs where !dir.isEmpty {
+            let candidate = URL(fileURLWithPath: dir).appendingPathComponent(name)
+            if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return nil
+    }
 }
 
 /// M7: bundled engine binaries. The packaged app keeps 7zz/lsar/unar

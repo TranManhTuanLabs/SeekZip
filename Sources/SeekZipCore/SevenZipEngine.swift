@@ -31,6 +31,33 @@ public struct ListingProgress: Sendable {
     public var entriesSeen: Int
 }
 
+/// Compression presets for the New Archive dialog (and the CLI's
+/// `--level`): the 7-Zip levels 1/5/7/9. The default is Normal (5) —
+/// 7-Zip's own default. Ultra (9) was the old default and costs
+/// ~3x the time for ~1% smaller output, so it is opt-in, not the
+/// default (see the 2026-11-11 benchmark: 150MB text took 163s at
+/// level 9 on the VM).
+public enum CompressionPreset: String, CaseIterable {
+    case fast, normal, maximum, ultra
+    public var level: Int {
+        switch self {
+        case .fast: return 1
+        case .normal: return 5
+        case .maximum: return 7
+        case .ultra: return 9
+        }
+    }
+    public var label: String {
+        switch self {
+        case .fast: return "Fast"
+        case .normal: return "Normal"
+        case .maximum: return "Maximum"
+        case .ultra: return "Ultra"
+        }
+    }
+    public static let `default` = CompressionPreset.normal
+}
+
 /// Thin streaming wrapper around the official `7zz` binary.
 /// Archive bytes never pass through this process's memory: listing output
 /// is read incrementally and parsed as it arrives (M2), and extraction is
@@ -108,24 +135,17 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
     public static let editableFormats: Set<String> = ["zip", "7z", "tar"]
 
     /// Resolution order: explicit path, app bundle Resources/Helpers
-    /// (M7: the packaged app stages its engines there), PATH.
+    /// (M7: the packaged app stages its engines there), the
+    /// well-known install dirs, then PATH (see `EngineBinarySearch`).
     public init(binaryPath: String? = nil) throws {
         if let binaryPath {
             binaryURL = URL(fileURLWithPath: binaryPath)
             return
         }
-        if let bundled = BundledEngines.sevenZipURL() {
-            binaryURL = bundled
-            return
+        guard let found = EngineBinarySearch.find(named: "7zz") else {
+            throw EngineError.binaryNotFound
         }
-        for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"] {
-            let candidate = URL(fileURLWithPath: dir).appendingPathComponent("7zz")
-            if FileManager.default.isExecutableFile(atPath: candidate.path) {
-                binaryURL = candidate
-                return
-            }
-        }
-        throw EngineError.binaryNotFound
+        binaryURL = found
     }
 
     /// Runs `7zz` with a cancellable, pausable process (M4). The
@@ -489,9 +509,13 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
     /// `destination`, after validating every target path. Fails fast
     /// with `EngineError.insufficientDiskSpace` when the destination
     /// volume cannot hold the uncompressed listing (M4 precheck).
-    /// On cancel, partially extracted entries are left in place — the
-    /// job is marked cancelled and a re-run overwrites them with `-y`;
-    /// deleting them would risk removing files the user already had.
+    /// Like `create`, extraction stages into a fresh directory
+    /// inside the destination first, and the finished entries move
+    /// into place only on success — a cancel or failure leaves no
+    /// half-written file in the destination (only the staging
+    /// directory, which is always removed). Previously 7zz wrote
+    /// straight into the destination, so a cancelled extract left
+    /// partial files behind; the XAD engine already staged this way.
     public func extract(archive: URL, entries: [String]? = nil,
                         to destination: URL, password: String? = nil,
                         control: JobControl? = nil,
@@ -503,7 +527,14 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
             _ = try EntryPathSafety.destinationURL(for: entry, in: destination)
         }
         try DiskSpace.require(info.totalUncompressed, at: destination)
-        var args = ["x", "-y", "-sccUTF-8", "-o\(destination.path)"]
+        try FileManager.default.createDirectory(at: destination,
+                                                withIntermediateDirectories: true)
+        let staging = destination.appendingPathComponent(
+            ".seekzip-7zz-tmp-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: staging,
+                                                withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: staging) }
+        var args = ["x", "-y", "-sccUTF-8", "-o\(staging.path)"]
         if let password { args.append("-p\(password)") }
         args.append(archive.path)
         // Selected entry names go through a @listfile when possible:
@@ -528,6 +559,55 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
         guard code == 0 else {
             throw EngineError.failed(exitCode: code, message: lastLine(of: output))
         }
+        // Move what 7zz produced into place: only the requested
+        // entries are ever extracted, so everything in staging is
+        // wanted. A directory entry carries its whole subtree with
+        // it. When entries were requested and nothing was produced,
+        // the names matched nothing — fail instead of reporting a
+        // silent success (extracting an empty archive, with
+        // `entries == nil`, still succeeds with nothing to move).
+        let produced = try FileManager.default.contentsOfDirectory(
+            at: staging, includingPropertiesForKeys: nil)
+        for item in produced {
+            try Self.moveIntoPlace(from: item,
+                                   to: destination.appendingPathComponent(item.lastPathComponent))
+        }
+        if entries != nil && produced.isEmpty {
+            throw EngineError.failed(
+                exitCode: 2,
+                message: "no matching entries in \(archive.lastPathComponent)")
+        }
+    }
+
+    /// Move an extracted item into its final place, merging
+    /// directories: when both sides are directories, the children
+    /// move one by one instead of failing on the existing directory.
+    /// A file (or a type mismatch) replaces what is there, matching
+    /// 7zz `-y` overwrite semantics. Existence and directory checks
+    /// use attributes (not `fileExists`, which follows symlinks and
+    /// misses dangling ones), so an extracted symlink is moved, not
+    /// skipped.
+    private static func moveIntoPlace(from source: URL, to target: URL) throws {
+        let fm = FileManager.default
+        let targetAttrs = try? fm.attributesOfItem(atPath: target.path)
+        guard targetAttrs != nil else {
+            try fm.moveItem(at: source, to: target)
+            return
+        }
+        let targetIsDir = (targetAttrs?[.type] as? FileAttributeType) == .typeDirectory
+        let sourceIsDir = ((try? fm.attributesOfItem(atPath: source.path)[.type]
+            as? FileAttributeType) == .typeDirectory)
+        if targetIsDir && sourceIsDir {
+            let children = try fm.contentsOfDirectory(at: source,
+                                                      includingPropertiesForKeys: nil)
+            for child in children {
+                try moveIntoPlace(from: child,
+                                  to: target.appendingPathComponent(child.lastPathComponent))
+            }
+            return
+        }
+        try fm.removeItem(at: target)
+        try fm.moveItem(at: source, to: target)
     }
 
     /// Create a ZIP or 7z archive. Split size in MB when > 0.
@@ -541,7 +621,7 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
     /// the rename. A free-space precheck (sources' total size, a
     /// conservative estimate) runs before 7zz starts.
     public func create(archive: URL, sources: [URL], format: String = "zip",
-                       level: Int = 9, password: String? = nil,
+                       level: Int = 5, password: String? = nil,
                        splitMB: Int = 0, control: JobControl? = nil,
                        onProgress: ((JobProgress) -> Void)? = nil) throws {
         let password = resolvePassword(for: archive, explicit: password)
@@ -657,7 +737,7 @@ public final class SevenZipEngine: ArchiveEngine, @unchecked Sendable {
     /// the entry names. The original is only replaced via the
     /// temp-copy path in `editArchive`.
     public func addEntries(archive: URL, sources: [URL],
-                           prefix: String? = nil, level: Int = 9,
+                           prefix: String? = nil, level: Int = 5,
                            password: String? = nil,
                            control: JobControl? = nil,
                            onProgress: ((JobProgress) -> Void)? = nil) throws {
