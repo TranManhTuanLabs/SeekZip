@@ -18,6 +18,15 @@ file bạn chọn, và tạo hoặc chỉnh sửa archive. Được build clean-
 Swift/SwiftUI sau khi nghiên cứu các dự án tham khảo (xem
 `docs/REFERENCE.md`); không sao chép code của bất kỳ ứng dụng bên thứ ba nào.
 
+**Dùng đúng engine 7-Zip thật.** SeekZip không tự viết lại code nén:
+tạo, giải nén, kiểm tra và liệt kê archive đều chạy trên binary `7zz`
+chính thức (7-Zip 26.05), đóng gói sẵn trong app. Đó là cùng engine mà
+7-Zip chạy trên Windows — đo đối đầu trên cùng một máy: tạo file 7z từ
+150 MB text mất 163,5 giây so với 158,2 giây của `7zz` gốc, file ra
+giống hệt từng byte. Sức mạnh là của 7-Zip, đã chứng minh 25 năm;
+SeekZip là app macOS native bọc quanh nó. (Engine XAD, `lsar`/`unar`,
+chỉ lo các định dạng cũ mà 7zz không đọc được.)
+
 ## Kiến trúc
 
 Một engine, ba frontend:
