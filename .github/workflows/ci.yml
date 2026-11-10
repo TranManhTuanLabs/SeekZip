@@ -5,9 +5,18 @@ name: CI
 # "error" lines, and warnings can be clues.
 
 on:
+  # Docs-only changes never start a run — editing a .md file or anything
+  # under docs/ must not run the tests (same rule as TransPeek test.yml
+  # and TransPeek-Windows build.yml).
   push:
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   pull_request:
-
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      
 jobs:
   build-and-test:
     # Apple Silicon runner — matches the app's target platform.
