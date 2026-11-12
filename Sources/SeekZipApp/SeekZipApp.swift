@@ -345,6 +345,14 @@ struct AboutView: View {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
     }
 
+    /// Support (donate): the QR card popover and the copy-account
+    /// button. The card image (SeekZip/DonateCard.png) is bundled
+    /// via the app target's Resources phase; `Image("DonateCard")`
+    /// resolves it by name. `accountCopied` flips the copy button
+    /// label to "Copied" for 2 seconds, same as TransPeek.
+    @State private var showingDonateCard = false
+    @State private var accountCopied = false
+
     var body: some View {
         VStack(spacing: 10) {
             Spacer()
@@ -374,6 +382,35 @@ struct AboutView: View {
                     GitHubMarkShape()
                         .fill(Color.primary)
                         .frame(width: 16, height: 16)
+                }
+            }
+            VStack(spacing: 8) {
+                Text("If this app is useful to you, buy me a coffee to keep improving it.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 24)
+                HStack(spacing: 12) {
+                    Button("Show QR Code") { showingDonateCard = true }
+                        .popover(isPresented: $showingDonateCard) {
+                            VStack(spacing: 8) {
+                                Image("DonateCard")
+                                    .resizable()
+                                    .scaledToFit()
+                                    .frame(width: 280)
+                                Text("BIDV — 2600786466 — TRAN MANH TUAN")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding()
+                        }
+                    Button(accountCopied ? "Copied" : "Copy Account Number") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString("2600786466", forType: .string)
+                        accountCopied = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { accountCopied = false }
+                    }
                 }
             }
             Text("Free and open source. Report issues and request features on GitHub.")

@@ -42,6 +42,10 @@
 			isa = PBXBuildFile;
 			fileRef = 13D5D8AF35D6499CA32F90DC;
 		};
+		5CEB15C26262A6077BC7E3A0 = {
+			isa = PBXBuildFile;
+			fileRef = 28ABC4A211E96B1DA1A37255;
+		};
 		181BFF8E95484C328DCD2D67 = {
 			isa = PBXFileReference;
 			explicitFileType = wrapper.application;
@@ -687,6 +691,7 @@
 				1AB3701562854DEB90D6DEEB,
 				A4133081D9844885A02D35E8,
 				CB106FE7156D41B98E75CC29,
+				28ABC4A211E96B1DA1A37255,
 			);
 			path = SeekZip;
 			sourceTree = "<group>";
@@ -697,12 +702,19 @@
 			path = Helpers.entitlements;
 			sourceTree = "<group>";
 		};
+		28ABC4A211E96B1DA1A37255 = {
+			isa = PBXFileReference;
+			lastKnownFileType = image.png;
+			path = DonateCard.png;
+			sourceTree = "<group>";
+		};
 		CB411D970143402A854BBDD3 = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = 85B3E41D622A4769A13768E6;
 			buildPhases = (
 				CFDB8418C453489AA6D9AA80,
 				87F45C6951964ACB9279D1B1,
+				DB9157FA5BC385C065893432,
 				AF8CFF994BAC44069D300452,
 				B5190ABEC76A4D028F91E9CC,
 			);
@@ -741,6 +753,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				1807CF65E41C4708AAB0E490,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DB9157FA5BC385C065893432 = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5CEB15C26262A6077BC7E3A0,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

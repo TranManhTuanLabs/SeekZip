@@ -185,6 +185,14 @@ cùng trường `password` (`add_entries`, `remove_entries`,
 Archive RAR giải nén được nhưng không tạo được — việc tạo RAR thuộc bản
 quyền proprietary (điều này đúng với mọi ứng dụng nén trên macOS).
 
+## Hỗ trợ
+
+Nếu ứng dụng này hữu ích với bạn, hãy ủng hộ mình một ly cà phê để mình tiếp tục hoàn thiện sản phẩm.
+
+<img src="SeekZip/DonateCard.png" width="300" alt="Thẻ VietQR ủng hộ — BIDV, tài khoản 2600786466, TRAN MANH TUAN">
+
+BIDV — 2600786466 — TRAN MANH TUAN
+
 ## Giấy phép
 
 MIT (dự kiến). `7zz` đi kèm vẫn thuộc giấy phép LGPL của 7-Zip.

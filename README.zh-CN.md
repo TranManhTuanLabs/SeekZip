@@ -149,6 +149,14 @@ Keychain（`com.seekzip.passwords`），Linux 测试运行时仅用内存存储�
 RAR 归档可以解压但不能创建——RAR 的创建是专有技术
 （所有 macOS 归档工具都是如此）。
 
+## 支持
+
+如果这个应用对你有帮助，请请我喝杯咖啡，支持我继续完善它。
+
+<img src="SeekZip/DonateCard.png" width="300" alt="VietQR 捐赠卡——BIDV，账号 2600786466，TRAN MANH TUAN">
+
+BIDV — 2600786466 — TRAN MANH TUAN
+
 ## 许可证
 
 MIT（计划中）。内置的 `7zz` 仍遵循 7-Zip 的 LGPL 许可证。

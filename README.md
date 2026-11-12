@@ -180,6 +180,14 @@ same `password` field (`add_entries`, `remove_entries`, `rename_entries`,
 RAR archives can be extracted but not created — RAR creation is proprietary
 (this is true of every macOS archiver).
 
+## Support
+
+If this app is useful to you, buy me a coffee to keep improving it.
+
+<img src="SeekZip/DonateCard.png" width="300" alt="VietQR donation card — BIDV, account 2600786466, TRAN MANH TUAN">
+
+BIDV — 2600786466 — TRAN MANH TUAN
+
 ## License
 
 MIT (planned). Bundled `7zz` remains under the 7-Zip LGPL license.
