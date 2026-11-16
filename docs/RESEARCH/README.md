@@ -12,10 +12,11 @@
   **not verified**.
 - When Manh settles a direction from research, update the related doc in the
   same round and link back to the report.
-- Language: research reports are published as-is, in the language they were
-  written (two of them are in Vietnamese — the language the research was done
-  in for the user), so nothing is lost in translation. The rest of SeekZip's
-  docs are English-only (only `README.md` keeps EN/VI/ZH).
+- Language: research reports may be in Vietnamese — they are published
+  as-is, in the language they were written, so nothing is lost in
+  translation. Other docs are English-first (the English `README.md` is the
+  canonical version); the Vietnamese and Chinese README translations are
+  only updated when the user asks, following the latest English version.
 
 ## Studies
 

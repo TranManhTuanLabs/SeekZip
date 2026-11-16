@@ -9,8 +9,7 @@ Tài liệu: [Build từ con số 0](docs/BUILD_FROM_ZERO.vi.md) ·
 [Ma trận kiểm thử](docs/TEST-MATRIX.vi.md) ·
 [Bàn giao cho agent](docs/HANDOFF.vi.md) ·
 [Nghiên cứu tham khảo](docs/REFERENCE.md) ·
-[Hướng dẫn phát hành](docs/RELEASE.md) ·
-[Nghiên cứu](docs/RESEARCH/README.md)
+[Hướng dẫn phát hành](docs/RELEASE.md)
 (mỗi tài liệu đều có bản Tiếng Việt và 简体中文 với hậu tố `.vi.md` / `.zh-CN.md`)
 
 Ứng dụng quản lý file nén native cho macOS trên Apple Silicon, miễn phí —
