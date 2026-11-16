@@ -7,15 +7,16 @@ a failure, or change the setup without rediscovering everything.
 
 SeekZip has a single workflow file (`.github/workflows/ci.yml`, two jobs).
 There is no `release.yml` and no pre-release automation — releases are
-manual, see `docs/RELEASE.md`. This doc is the one place for the whole
-git + CI + build setup; unlike TransPeek, which splits it into
-`GIT-CI-BUILD-SETUP.md` (setup + intervention log) and
-`BUILD-TEST-WORKFLOW-GITHUB-CI.md` (CI detail), SeekZip's workflow is small
-enough that one doc covers it. If the workflow grows a second file (e.g. a
-release workflow), split the CI detail out then.
+manual, see `docs/RELEASE.md`. The CI detail (how to read a red run,
+caching, gotchas) lives in `docs/BUILD-TEST-WORKFLOW-GITHUB-CI.md` —
+the same two-doc pair as TransPeek mac and TransPeek-Windows. Both docs
+must be updated together whenever the workflow changes (rule, 2026-11-17,
+all repos).
 
 Related docs:
 
+- `docs/BUILD-TEST-WORKFLOW-GITHUB-CI.md` — the CI workflow in detail
+  (how to read a red run, caching, gotchas).
 - `docs/BUILD_FROM_ZERO.md` — build the project from scratch, step by step
   (links here from §10).
 - `docs/TEST-MATRIX.md` — the test matrix (fixtures, cases, expected
