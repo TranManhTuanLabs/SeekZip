@@ -9,7 +9,8 @@ Docs: [Build from zero](docs/BUILD_FROM_ZERO.md) ·
 [Test matrix](docs/TEST-MATRIX.md) ·
 [Agent handoff](docs/HANDOFF.md) ·
 [Reference research](docs/REFERENCE.md) ·
-[Release guide](docs/RELEASE.md)
+[Release guide](docs/RELEASE.md) ·
+[Research](docs/RESEARCH/README.md)
 (each also available in Tiếng Việt and 简体中文 with `.vi.md` / `.zh-CN.md` suffixes)
 
 A free, native macOS archive manager for Apple Silicon — browse and preview

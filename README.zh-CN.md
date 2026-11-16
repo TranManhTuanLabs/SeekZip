@@ -9,7 +9,8 @@
 [测试矩阵](docs/TEST-MATRIX.zh-CN.md) ·
 [Agent 交接](docs/HANDOFF.zh-CN.md) ·
 [参考研究](docs/REFERENCE.md) ·
-[发布指南](docs/RELEASE.md)
+[发布指南](docs/RELEASE.md) ·
+[研究](docs/RESEARCH/README.md)
 （每份文档另有 Tiếng Việt 和简体中文版本，后缀分别为 `.vi.md` / `.zh-CN.md`）
 
 一款免费的 macOS 原生归档管理器，专为 Apple Silicon 打造——在解压之前先浏览和

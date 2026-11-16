@@ -3,6 +3,9 @@
 Audience: a developer (human or AI agent) with a fresh Mac who has never seen
 this project. Follow top to bottom; every step is verifiable.
 
+Background research behind the decisions in this guide lives in
+[`docs/RESEARCH/`](RESEARCH/README.md) (see the Research section at the end).
+
 ## 1. Prerequisites
 
 | Need | Version | Check |
@@ -38,6 +41,10 @@ Engine resolution order (see `SevenZipEngine.init`): explicit path →
 `/usr/bin`. Release builds bundle the official macOS arm64 `7zz` from
 7-zip.org together with its `License.txt` (LGPL) — never download it from
 third-party mirrors.
+
+Why the official `7zz` binary, and the hard limits (no RAR creation, App
+Store sandbox, CVE pinning): see the [7-Zip / WinRAR parity
+research](RESEARCH/seekzip-7zip-winrar-parity-20261106-1842/report.md).
 
 ## 4. Build
 
@@ -98,11 +105,16 @@ printf '%s\n' \
 
 Any MCP client can spawn `seekzip-mcp` over stdio with the same tools.
 
+Background: [CLI + MCP research](RESEARCH/seekzip-cli-mcp-ai-need-20261110-1931/report.md)
+(in Vietnamese) — why the CLI exists and what the MCP server is for.
+
 ## 10. CI
 
 `.github/workflows/ci.yml` runs on a macOS 15 ARM runner for every push:
 install engine → `swift build` → `swift test` → generate fixtures →
-CLI matrix smoke tests. A red CI blocks merges.
+CLI matrix smoke tests. A red CI blocks merges. Docs-only changes
+(`docs/**`, `*.md`) do not trigger CI; the app artifact is built only when
+the commit message contains `[build-app]`.
 
 ## 11. Troubleshooting
 
@@ -113,8 +125,25 @@ CLI matrix smoke tests. A red CI blocks merges.
 | A command hangs forever | Should not happen: engine stdin is `/dev/null` by design. If it does, file a bug with the archive |
 | `swift build` fails on the app target on Linux | Expected — build on macOS |
 
-## 12. Packaging (roadmap, not yet implemented)
+## 12. Packaging (status)
 
-App bundle with bundled `7zz` + license, Developer ID signing, notarisation,
-Finder and Quick Look extensions, Homebrew cask. See `docs/HANDOFF.md`
-for the milestone order.
+App bundle with bundled `7zz` + license, FinderSync and Quick Look
+extensions: implemented (milestones M1–M7, app v0.2.0); CI builds the app
+artifact when the commit message contains `[build-app]`, signed ad-hoc.
+Still open: Developer ID signing + notarisation (Apple Developer membership
+deferred), Homebrew tap/cask. See `docs/HANDOFF.md` for the milestone order
+and `docs/RELEASE.md` for the release checklist.
+
+## Research
+
+Background research behind this guide, in [`docs/RESEARCH/`](RESEARCH/README.md):
+
+- [7-Zip / WinRAR parity](RESEARCH/seekzip-7zip-winrar-parity-20261106-1842/report.md)
+  (2026-11-06, English) — why the official `7zz` engine, and the hard limits.
+  Kept as future marketing source.
+- [CLI + MCP for AI assistants](RESEARCH/seekzip-cli-mcp-ai-need-20261110-1931/report.md)
+  (2026-11-10, Vietnamese) — why the CLI and MCP server exist.
+- [UI/UX redesign, Apple style](RESEARCH/seekzip-ui-redesign-apple-style-20261111-1547/report.md)
+  (2026-11-11, Vietnamese) — the full redesign proposal; its direction was
+  superseded 2026-11-13 (main keeps the minimal UI, full redesign to a
+  separate branch).
