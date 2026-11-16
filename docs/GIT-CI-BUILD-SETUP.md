@@ -1,5 +1,10 @@
 # Git, CI Test & Build Workflow Setup (SeekZip)
 
+> **Rule (2026-11-17, all repos): both workflow docs — this one and
+> `docs/BUILD-TEST-WORKFLOW-GITHUB-CI.md` — must be updated TOGETHER
+> whenever the workflow changes: same round, same commit if possible,
+> never deferred to later.**
+
 The complete setup of git, the CI test workflow, and the app build workflow
 for this repo — plus the history of what was changed and why, so a future
 maintainer (or another AI entering this repo) can investigate a red run, fix
@@ -9,9 +14,7 @@ SeekZip has a single workflow file (`.github/workflows/ci.yml`, two jobs).
 There is no `release.yml` and no pre-release automation — releases are
 manual, see `docs/RELEASE.md`. The CI detail (how to read a red run,
 caching, gotchas) lives in `docs/BUILD-TEST-WORKFLOW-GITHUB-CI.md` —
-the same two-doc pair as TransPeek mac and TransPeek-Windows. Both docs
-must be updated together whenever the workflow changes (rule, 2026-11-17,
-all repos).
+the same two-doc pair as TransPeek mac and TransPeek-Windows.
 
 Related docs:
 
@@ -307,8 +310,9 @@ each recurring problem.
 - **Need a testable app:** put `[build-app]` in the commit message —
   only when Manh said "build-app". Download the artifact from the newest
   green run (`SeekZip-macOS`, ~5.6 MB); it expires after 30 days.
-- **After any test or workflow change:** update this doc in the same
-  round (cause, fix, verification status) — same rule as TransPeek.
+- **After any test or workflow change:** update BOTH workflow docs in
+  the same round (cause, fix, verification status) — same rule as
+  TransPeek; never defer the doc update to later.
 
 ## Links
 

@@ -1,5 +1,10 @@
 # CI Notes (SeekZip)
 
+> **Rule (2026-11-17, all repos): both workflow docs — this one and
+> `docs/GIT-CI-BUILD-SETUP.md` — must be updated TOGETHER whenever the
+> workflow changes: same round, same commit if possible, never deferred
+> to later.**
+
 How the `CI` workflow (`.github/workflows/ci.yml`) is set up and how to
 read a red run. Written so the next person (or future us) does not have to
 rediscover any of this.
