@@ -115,7 +115,7 @@ install engine → `swift build` → `swift test` → generate fixtures →
 CLI matrix smoke tests. A red CI blocks merges. Docs-only changes
 (`docs/**`, `*.md`) do not trigger CI; the app artifact is built only when
 the commit message contains `[build-app]`. Full git + CI + build setup,
-including the intervention log: `docs/GIT-CI-BUILD-SETUP.md`.
+including the intervention log: `docs/TEST-BUILD-WORKFLOW-GITHUB/GIT-CI-BUILD-SETUP.md`.
 
 ## 11. Troubleshooting
 
