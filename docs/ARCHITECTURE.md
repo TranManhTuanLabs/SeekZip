@@ -187,3 +187,22 @@ jobs on a background thread (M4).
 | Engines bundled in `Resources/Helpers/`, inherit entitlement | Helpers run inside the app sandbox; staged + SHA-256-verified by script, signed in the Xcode "Bundle Engines" phase |
 | App Group for shared engine settings | One source of truth for the app + both extensions (MacPacker pattern, behaviour-level only); placeholder group id until the owner creates theirs |
 | Passwords via `-p` argument | 7zz's only non-interactive channel; known trade-off: visible in the process list on the same machine (documented risk, REFERENCE.md §5) |
+
+## 9. Architecture principles
+
+General principles for all projects and all repos (Manh, 2026-11-17).
+They are the reason the structure above looks the way it does — and the
+test any new code has to pass.
+
+- **Easy to maintain, easy to upgrade, flexible.** Changing one place
+  must not break another; adding a feature must not mean rewriting old
+  code; swapping a part (engine, provider, UI) must not touch the core.
+- **Split code and folders when needed — one feature, one module or
+  folder.** SeekZip already follows this: one engine core (`SeekZipCore`),
+  three thin frontends (app, CLI, MCP), and the two extensions
+  (FinderSync, QuickLook) as separate targets. New features go in their
+  own module or folder, not into the main code file.
+- **Share functions and components.** Anything used in more than one
+  place is written once and reused — no copy-paste of a second version.
+- **A structure as clear as a big project.** Anyone new to the repo
+  should find the file they need to change without asking.
