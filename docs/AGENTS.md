@@ -23,7 +23,7 @@
 ## 4. Commit và CI
 
 - Gộp các file liên quan thành **1 commit** rồi đẩy; không đẩy từng file qua trình duyệt.
-- Chỉ cho `[build-app]` vào commit message khi Manh nói rõ "build-app" — Muse không tự quyết.
+- **Luôn build (Manh 18/11/2026):** mọi commit code đều build app (không còn cổng `[build-app]`) — không cần thêm tag gì vào commit message.
 - Docs-only (docs/**, *.md) thì CI không chạy; sửa docs thì đẩy ngay cùng đợt (commit docs-only).
 - CI đang chờ/chưa chạy thì sửa xong đẩy luôn cho gộp vào run mới nhất; run cũ bị push mới đè lên mà huỷ (concurrency cancel) là bình thường, không cần báo.
 - Run bị huỷ mà KHÔNG có run mới đè lên thì HỎI Manh trước khi đoán nguyên nhân hay re-run.

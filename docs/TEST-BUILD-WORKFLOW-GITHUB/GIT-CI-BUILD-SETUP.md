@@ -84,10 +84,11 @@ Related docs:
 - **Gate (milestone flow):** work locally → push one batch → CI green →
   Manh tests live on his Mac → ok / reports bugs → fix → only then move
   to the next milestone.
-- **Commit message marker `[build-app]`:** the app artifact is only built
-  when the commit message contains `[build-app]` (see §3). Only put
-  `[build-app]` in a commit when Manh explicitly says "build-app". Do not
-  decide it yourself, even if the change is visible in the app.
+- **Always build (Manh 2026-11-18):** every code push builds the app
+  artifact (see §3) — no more `[build-app]` commit-message gate. The gate
+  was removed because the repo is public (Actions minutes are free) and
+  forgetting the tag used to cost a whole second CI run. The `[build-app]`
+  marker is now meaningless; do not add it to commit messages.
 - **Docs-only changes never run CI** (see §2). `../TIMELOG.md` is
   updated locally after each batch and merged into the next code push —
   never committed on its own.
@@ -114,8 +115,8 @@ Related docs:
   Generate test fixtures (`Tests/Matrix/generate-matrix.sh`) → Matrix
   smoke tests via the CLI (list/test/extract/verify/convert; zip-slip
   must exit 4; truncated archive must fail cleanly).
-- Job 2, `build-app` — only when the commit message contains
-  `[build-app]`, and only after `build-and-test` passes (see §3).
+- Job 2, `build-app` — on every code push, and only after
+  `build-and-test` passes (see §3).
 
 ### How tests run
 
@@ -174,11 +175,9 @@ Related docs:
 
 ## 3. Build workflow (app artifact + ad-hoc signing)
 
-### Build steps (all gated on `[build-app]`)
+### Build steps (always run on every code push)
 
-Job `build-app` (`if: github.event_name == 'push' &&
-contains(github.event.head_commit.message, '[build-app]')`,
-`needs: build-and-test`, `runs-on: macos-15`):
+Job `build-app` (`needs: build-and-test`, `runs-on: macos-15`):
 
 1. Checkout.
 2. Install 7-Zip engine (`brew install sevenzip unar xcbeautify`).
@@ -291,6 +290,22 @@ each recurring problem.
   `README.vi.md`/`README.zh-CN.md`: translations are only updated when
   Manh asks (language rule, 2026-11-17, all repos).
 
+- **2026-11-18 — `[build-app]` gate REMOVED, always build (Manh;
+  `ci.yml` commit `280a386`, same change in TransPeek mac `test.yml`
+  `1932a47` and TransPeek-Windows `build.yml` `55ab3b2` + indent fix
+  `12ae47a`).** Manh noticed the mac CI #228 took only 4m53s including
+  the full app build and asked why every commit doesn't just build: the
+  repo is public (Actions minutes are free), the build adds only a
+  couple of minutes to a run that already happens, and forgetting the
+  tag used to cost a whole second run. The `if:` line was removed from
+  the `build-app` job, so it now runs on every push after
+  `build-and-test` passes. The `[build-app]` marker is now meaningless
+  — do not add it to commit messages. Lesson: browser YAML edits can
+  silently break indentation (the Windows `build.yml` Publish step got
+  18 spaces instead of 6, which made the YAML invalid) — ALWAYS verify
+  a browser-edited workflow by fetching the file via the API and
+  parsing the YAML before calling it done.
+
 ## 5. Quick reference
 
 - **Local checks before pushing:** `swift test` (core/CLI/MCP only on
@@ -307,9 +322,9 @@ each recurring problem.
   capacity problem, not a failure; re-run it.
 - **A red run with no code change:** re-run first. If it stays red, read
   the failing step's log in the browser (API log reads are 403).
-- **Need a testable app:** put `[build-app]` in the commit message —
-  only when Manh said "build-app". Download the artifact from the newest
-  green run (`SeekZip-macOS`, ~5.6 MB); it expires after 30 days.
+- **Need a testable app:** every code push builds one — download the
+  artifact from the newest green run (`SeekZip-macOS`, ~5.6 MB); it
+  expires after 30 days.
 - **After any test or workflow change:** update BOTH workflow docs in
   the same round (cause, fix, verification status) — same rule as
   TransPeek; never defer the doc update to later.

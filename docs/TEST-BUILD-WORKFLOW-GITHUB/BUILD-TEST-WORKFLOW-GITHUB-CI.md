@@ -24,8 +24,8 @@ rediscover any of this.
   (`CODE_SIGNING_ALLOWED=NO`, piped through `xcbeautify` with
   `set -o pipefail`) → `swift test` (108 tests) → Generate test fixtures
   → Matrix smoke tests via the CLI.
-- Job 2, `build-app` — only when the commit message contains
-  `[build-app]`, and only after `build-and-test` passes: Stage engines
+- Job 2, `build-app` — on every code push, and only after
+  `build-and-test` passes: Stage engines
   (`scripts/package-engines.sh`) → Build app, Release, unsigned
   (`CURRENT_PROJECT_VERSION=${{ github.run_number }}`) → Ad-hoc sign app
   and extensions → Zip app (`ditto`, keeps the `.app` bundle) → Upload
@@ -40,10 +40,10 @@ To avoid wasting CI runs (and other people's runners):
 - **Docs-only changes do not trigger CI at all.** The `push` and
   `pull_request` triggers have `paths-ignore` for `docs/**` and
   `**.md` (added 2026-11-11, commit `5fdfbe6`).
-- **Tests run on every code commit**, but the app artifact is only built
-  when the commit message contains `[build-app]`. Only put `[build-app]`
-  in a commit when Manh explicitly says "build-app" — never decide it
-  yourself, even if the change is visible in the app.
+- **Tests run on every code commit, and the app is built on every code
+  commit too** (always build — Manh 2026-11-18, no more `[build-app]`
+  gate). (Same as TransPeek mac and TransPeek-Windows — all three
+  dropped the gate the same day.)
 
 ## The artifact is ad-hoc signed — verified working since run #167
 
@@ -54,8 +54,7 @@ macOS refuses an unsigned extension outright, so Finder would never
 load FinderSync or QuickLook.
 
 Since 2026-11-11 (commit `8d00729`) the workflow has an "Ad-hoc sign
-app and extensions" step (after Build app, before Zip app, gated on
-`[build-app]`). It signs each `.appex` with its own entitlements first,
+app and extensions" step (after Build app, before Zip app). It signs each `.appex` with its own entitlements first,
 then the app, then `codesign --verify --deep --strict`. **Verified
 working: run #167 (2026-11-11), artifact `SeekZip-macOS` 5,669,731
 bytes, sha256
