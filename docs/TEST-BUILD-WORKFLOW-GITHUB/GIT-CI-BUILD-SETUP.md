@@ -306,6 +306,24 @@ each recurring problem.
   a browser-edited workflow by fetching the file via the API and
   parsing the YAML before calling it done.
 
+- **2026-11-18 — Branch runs can go GREEN with NO app if the branch
+  carries a stale workflow (learned from TransPeek mac, run #233).**
+  TransPeek's `feature/fast-read-feedback` was created before the
+  always-build change, so it still had the old `test.yml` with the
+  `[build-app]` gate; a commit without `[build-app]` passed tests but
+  skipped Build/Sign/Zip/Upload, uploading only test results — no
+  artifact to test. The same trap applies here: a SeekZip feature branch
+  created before `ci.yml` commit `280a386` still has the old `ci.yml`
+  with the `build-app` job gated on `[build-app]`, so its runs will pass
+  tests but never build the app. The fix on TransPeek was syncing main's
+  `test.yml` into the branch (commit `338fd5c`) plus a code change to
+  trigger a run. Lesson: when a workflow changes on main, sync the
+  workflow file into existing feature branches before relying on their
+  runs — a green run does NOT guarantee an app artifact. Always check
+  the run's steps/artifacts, not just its conclusion. A workflow-only
+  push does not trigger a run (`paths-ignore`), so include a code change
+  (or dispatch manually) after syncing.
+
 ## 5. Quick reference
 
 - **Local checks before pushing:** `swift test` (core/CLI/MCP only on
