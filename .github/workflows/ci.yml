@@ -64,13 +64,12 @@ jobs:
           $BIN extract /tmp/fixtures/zip-slip.zip /tmp/out && exit 1 || test $? -eq 4
 
   build-app:
-    # Test build, on demand: only runs when the commit message contains
-    # [build-app]. Builds the app (Release, ad-hoc signed after the build) with the engines
-    # bundled, packages it as a zip (ditto keeps the .app bundle intact,
-    # like TransPeek does), and uploads the zip as a downloadable
-    # artifact, so the app can be tested without installing Xcode
-    # locally. Only runs after build-and-test passes.
-    if: github.event_name == 'push' && contains(github.event.head_commit.message, '[build-app]')
+    # Test build on every push (always build — Manh 2026-11-18, no more
+    # "[build-app]" gate). Builds the app (Release, ad-hoc signed after
+    # the build) with the engines bundled, packages it as a zip (ditto
+    # keeps the .app bundle intact, like TransPeek does), and uploads the
+    # zip as a downloadable artifact, so the app can be tested without
+    # installing Xcode locally. Only runs after build-and-test passes.
     needs: build-and-test
     runs-on: macos-15
     steps:
