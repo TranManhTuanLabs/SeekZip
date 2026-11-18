@@ -18,7 +18,7 @@
 
 - Code phải **dễ bảo trì, dễ nâng cấp, linh động** — sửa 1 chỗ không vỡ chỗ khác; thêm tính năng mới không phải viết lại code cũ.
 - **1 tính năng = 1 module/thư mục riêng**; dùng chung hàm/component, không copy-paste 2 bản.
-- Xem quyết định kiến trúc trong `docs/ARCHITECTURE.md` §5.
+- Xem quyết định kiến trúc trong `docs/ARCHITECTURE.md` §8 (Decision log) và §9 (Architecture principles).
 
 ## 4. Commit và CI
 
@@ -44,6 +44,7 @@
 - Manh viết sai chính tả thì **tự correct cho đúng** khi đưa vào app/docs; để ý cả chữ hoa/thường.
 - Manh dùng từ kỹ thuật / tiếng Anh sai thì **báo hoặc sửa cho đúng ngay lúc đó**.
 - Quyết định sản phẩm phải hỏi Manh trước, trừ khi anh liệt kê phương án và bảo Muse chọn.
+- **Khi cần 1 tính năng/control, CHECK NATIVE TRƯỚC** — native có sẵn và hỗ trợ ngon (đủ dùng, đúng chuẩn hệ thống) thì dùng native; chỉ tự chế khi native KHÔNG có hoặc KHÔNG hỗ trợ đủ tốt.
 - Trước khi tự chế một tính năng mà native không có, **báo Manh 1 câu trước** (native không có, muốn làm phải tự chế, anh có đồng ý không) rồi mới làm.
 - Trước khi sửa UI, **lên khung layout trước, Manh duyệt khung đó**, rồi mới sửa dần theo khung.
 
@@ -51,3 +52,12 @@
 
 - Manh **không phải dân IT gốc, đang học, làm theo kiểu vibecode**. Giải thích bằng tiếng Việt đơn giản, ví dụ từ chính dự án, không dạy dồn dập.
 - Anh quyết nhanh, thích gộp 2–3 sửa vào 1 lần chạy CI rồi test 1 lượt.
+
+## 8. Chọn phương án triển khai — đọc mã nguồn thật trước, tra nhanh cho chắc, tra kỹ khi cần
+
+- **Trước khi làm gì, đọc mã nguồn THẬT của dự án rồi mới chọn phương án triển khai tốt nhất** (dựa trên code đang chạy, control/API đang dùng, hành vi thật của nó), không phụ thuộc hoàn toàn vào trí nhớ.
+- **Tra lại nhanh cho chắc** với mọi thứ sẽ đưa vào code; **tra kỹ khi cần** (logic phức tạp, tên API/enum, hành vi quyết định chọn phương án nào).
+- Đây là dạng tổng quát của 2 quy tắc: tra tên API/enum (14/11/2026) + tra mã code/cú pháp (19/11/2026) — **mở thẳng tài liệu chính chủ TRƯỚC khi dùng** (vd Microsoft Learn cho API WinUI/.NET, Google Cloud docs cho mã ngôn ngữ, Apple Developer docs cho SwiftUI/AppKit); không lấy tên/mã từ trí nhớ hay trang thứ ba làm đáp án.
+- **"Native trước, tự chế sau" là 1 phần của việc chọn phương án** (xem §6).
+- Bài học (Windows CI #189, 19/11): chọn ComboBox editable + `TextChanged` để lọc live từ trí nhớ kiểu WPF mà không tra WinUI trước — WinUI ComboBox KHÔNG có `TextChanged`, build đỏ, phải đổi sang AutoSuggestBox.
+- (Manh 19/11/2026 05:33, áp dụng mọi repo.)
