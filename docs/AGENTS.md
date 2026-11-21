@@ -61,3 +61,15 @@
 - **"Native trước, tự chế sau" là 1 phần của việc chọn phương án** (xem §6).
 - Bài học (Windows CI #189, 19/11): chọn ComboBox editable + `TextChanged` để lọc live từ trí nhớ kiểu WPF mà không tra WinUI trước — WinUI ComboBox KHÔNG có `TextChanged`, build đỏ, phải đổi sang AutoSuggestBox.
 - (Manh 19/11/2026 05:33, áp dụng mọi repo.)
+
+## 9. Cái đang ngon, ổn định thì để nguyên, tìm đường khác nối (Manh 21/11/2026)
+
+- **Kinh nghiệm làm:** a part of the system that runs well and has been
+  tested is NOT edited directly to add a new feature — editing it is very
+  likely to break the logic that works. Instead, connect via a separate
+  path: build the new part separately, then trigger / reuse the old
+  behaviour through its existing callbacks. Example (TransPeek mac): the
+  fake icon in Read mode — the float icon logic was left untouched; a
+  look-alike fake icon was built, and its hover/click trigger into the
+  existing icon.
+- Recorded in full in `ARCHITECTURE.md` §9 (architecture principles).

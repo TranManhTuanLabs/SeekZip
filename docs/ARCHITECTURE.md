@@ -204,5 +204,11 @@ test any new code has to pass.
   own module or folder, not into the main code file.
 - **Share functions and components.** Anything used in more than one
   place is written once and reused — no copy-paste of a second version.
+- **Leave what's working and stable alone, find another path to connect
+  (Manh 2026-11-21).** A part of the system that runs well and has been
+  tested is NOT edited directly to add a new feature — editing it is very
+  likely to break the logic that works. Instead, connect via a separate
+  path: build the new part separately, then trigger / reuse the old
+  behaviour through its existing callbacks.
 - **A structure as clear as a big project.** Anyone new to the repo
   should find the file they need to change without asking.
